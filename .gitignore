@@ -1,0 +1,12 @@
+venv/
+__pycache__/
+*.pyc
+.env
+downloads/
+*.egg-info/
+dist/
+build/
+.streamlit/
+backend_log.txt
+frontend_log.txt
+*.log
