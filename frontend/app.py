@@ -17,7 +17,7 @@ st.set_page_config(
     initial_sidebar_state="collapsed",
 )
 
-BACKEND_URL = "http://localhost:8001"
+BACKEND_URL = "http://localhost:8011"
 
 # ---------- Custom CSS ----------
 st.markdown("""
@@ -776,7 +776,7 @@ def build_player_html(video_id: str, segments: list, title: str, words: list = N
                     banner.className = 'pause-banner visible';
                     window.parent.postMessage({{ type: 'youtube_paused', time: currentTime }}, '*');
                     // Store pause time in backend so Streamlit can read it without postMessage
-                    fetch('http://localhost:8001/api/set_pause', {{
+                    fetch('http://localhost:8011/api/set_pause', {{
                         method: 'POST',
                         headers: {{'Content-Type': 'application/json'}},
                         body: JSON.stringify({{time: currentTime}})
@@ -1045,7 +1045,7 @@ if load_clicked and url_input:
                 step2.markdown("⬜ **Step 2/3**: Downloading audio...")
             with col3:
                 step3 = st.empty()
-                step3.markdown("⬜ **Step 3/3**: Transcribing with Deepgram...")
+                step3.markdown("⬜ **Step 3/3**: Transcribing in parallel chunks...")
 
         try:
             with st.spinner(""):
