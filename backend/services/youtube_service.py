@@ -105,6 +105,13 @@ def extract_playlist_info(url: str) -> dict:
             "total": int,
         }
     """
+    # When the URL is a watch URL with a list= param (e.g. watch?v=xxx&list=yyy),
+    # yt-dlp returns a redirect object instead of expanding the playlist.
+    # Always convert to a canonical playlist URL so we get all entries.
+    list_match = re.search(r'list=([A-Za-z0-9_-]+)', url)
+    if list_match:
+        url = f"https://www.youtube.com/playlist?list={list_match.group(1)}"
+
     ydl_opts = {
         "quiet": True,
         "no_warnings": True,
