@@ -17,7 +17,7 @@ if sys.stdout.encoding != 'utf-8':
 if sys.stderr.encoding != 'utf-8':
     sys.stderr.reconfigure(encoding='utf-8', errors='replace')
 
-from backend.services.youtube_service import extract_video_info, download_audio
+from backend.services.youtube_service import extract_video_info, download_audio, extract_playlist_info
 from backend.services.deepgram_service import transcribe_audio
 from backend.services.caption_service import get_youtube_captions
 from backend.services.groq_service import summarize_transcript, chat_with_context
@@ -95,6 +95,20 @@ class ChatRequest(BaseModel):
 
 class ChatResponse(BaseModel):
     answer: str
+
+
+class PlaylistVideoItem(BaseModel):
+    id: str
+    title: str
+    duration: int
+    thumbnail: str
+    url: str
+
+
+class PlaylistResponse(BaseModel):
+    playlist_title: str
+    videos: list[PlaylistVideoItem]
+    total: int
 
 
 # In-memory pause store (per-server, good enough for single-user dev use)
@@ -223,6 +237,23 @@ def chat_about_video(request: ChatRequest):
     except Exception as e:
         print(f"[API] Chat error: {type(e).__name__}: {e}")
         raise HTTPException(status_code=500, detail=f"Chat failed: {str(e)}")
+
+
+@app.post("/api/playlist", response_model=PlaylistResponse)
+def get_playlist(request: VideoRequest):
+    """Return metadata for all videos in a YouTube playlist URL."""
+    try:
+        result = extract_playlist_info(request.url)
+        return PlaylistResponse(
+            playlist_title=result["playlist_title"],
+            videos=[PlaylistVideoItem(**v) for v in result["videos"]],
+            total=result["total"],
+        )
+    except ValueError as e:
+        raise HTTPException(status_code=400, detail=str(e))
+    except Exception as e:
+        print(f"[API] Playlist error: {type(e).__name__}: {e}")
+        raise HTTPException(status_code=500, detail=f"Failed to load playlist: {str(e)}")
 
 
 @app.post("/api/set_pause")

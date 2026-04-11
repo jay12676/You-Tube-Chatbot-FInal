@@ -92,3 +92,51 @@ def download_audio(url: str, video_id: str) -> str:
             raise FileNotFoundError(f"Audio file not found after download for video: {video_id}")
 
         return downloaded_path
+
+
+def extract_playlist_info(url: str) -> dict:
+    """
+    Extract metadata for every video in a YouTube playlist.
+
+    Returns:
+        {
+            "playlist_title": str,
+            "videos": [{"id", "title", "duration", "thumbnail", "url"}, ...],
+            "total": int,
+        }
+    """
+    ydl_opts = {
+        "quiet": True,
+        "no_warnings": True,
+        "extract_flat": True,   # metadata only, no download
+        "ignoreerrors": True,   # skip unavailable videos
+    }
+    with yt_dlp.YoutubeDL(ydl_opts) as ydl:
+        info = ydl.extract_info(url, download=False)
+
+    if not info:
+        raise ValueError("Could not extract playlist info from the provided URL")
+
+    entries = info.get("entries") or []
+    videos = []
+    for entry in entries:
+        if not entry or not entry.get("id"):
+            continue
+        vid_id = entry["id"]
+        videos.append({
+            "id": vid_id,
+            "title": entry.get("title", "Unknown Title"),
+            "duration": int(entry.get("duration") or 0),
+            "thumbnail": (
+                entry.get("thumbnail")
+                or f"https://i.ytimg.com/vi/{vid_id}/mqdefault.jpg"
+            ),
+            "url": f"https://www.youtube.com/watch?v={vid_id}",
+        })
+
+    print(f"[YouTube] Playlist '{info.get('title')}': {len(videos)} videos")
+    return {
+        "playlist_title": info.get("title", "Untitled Playlist"),
+        "videos": videos,
+        "total": len(videos),
+    }

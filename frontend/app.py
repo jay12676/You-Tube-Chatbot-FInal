@@ -316,6 +316,51 @@ st.markdown("""
         color: #e2e8f0 !important;
         font-family: 'Inter', sans-serif !important;
     }
+
+    /* ===== Playlist Queue ===== */
+    .playlist-header {
+        display: flex;
+        align-items: center;
+        justify-content: space-between;
+        margin-bottom: 0.8rem;
+    }
+    .playlist-header h3 { color: #e2e8f0; font-size: 1rem; font-weight: 600; margin: 0; }
+    .playlist-header .pl-count { color: #64748b; font-size: 0.82rem; font-family: 'JetBrains Mono', monospace; }
+    .playlist-queue {
+        display: flex;
+        gap: 12px;
+        overflow-x: auto;
+        padding: 4px 2px 10px;
+    }
+    .playlist-queue::-webkit-scrollbar { height: 4px; }
+    .playlist-queue::-webkit-scrollbar-track { background: rgba(255,255,255,0.02); }
+    .playlist-queue::-webkit-scrollbar-thumb { background: rgba(99,102,241,0.3); border-radius: 2px; }
+    .pl-card {
+        flex-shrink: 0;
+        width: 155px;
+        background: rgba(255,255,255,0.04);
+        border: 1px solid rgba(255,255,255,0.07);
+        border-radius: 10px;
+        overflow: hidden;
+        position: relative;
+    }
+    .pl-card.pl-current { border-color: #6366f1; box-shadow: 0 0 14px rgba(99,102,241,0.3); }
+    .pl-card.pl-done { opacity: 0.4; }
+    .pl-card img { width: 100%; aspect-ratio: 16/9; object-fit: cover; display: block; }
+    .pl-card-body { padding: 6px 8px 8px; }
+    .pl-card-title {
+        font-size: 11px; color: #94a3b8; line-height: 1.4;
+        display: -webkit-box; -webkit-line-clamp: 2;
+        -webkit-box-orient: vertical; overflow: hidden;
+    }
+    .pl-card.pl-current .pl-card-title { color: #f1f5f9; }
+    .pl-card-dur { font-size: 10px; color: #64748b; margin-top: 3px; font-family: 'JetBrains Mono', monospace; }
+    .pl-badge {
+        position: absolute; top: 4px; right: 4px;
+        background: rgba(0,0,0,0.65); color: #f1f5f9;
+        font-size: 10px; padding: 2px 5px; border-radius: 4px;
+    }
+    .pl-badge-playing { background: rgba(99,102,241,0.85) !important; }
 </style>
 """, unsafe_allow_html=True)
 
@@ -345,6 +390,11 @@ def format_duration(seconds: int) -> str:
     if h > 0:
         return f"{h}:{m:02d}:{s:02d}"
     return f"{m}:{s:02d}"
+
+
+def is_playlist_url(url: str) -> bool:
+    """Return True if the URL points to a YouTube playlist."""
+    return bool(url) and "list=" in url and ("youtube.com" in url or "youtu.be" in url)
 
 
 def build_player_html(video_id: str, segments: list, title: str, words: list = None) -> str:
@@ -984,6 +1034,18 @@ if "chatbot_active" not in st.session_state:
 if "summary_loading" not in st.session_state:
     st.session_state.summary_loading = False
 
+# Playlist state
+if "playlist_videos" not in st.session_state:
+    st.session_state.playlist_videos = []
+if "playlist_index" not in st.session_state:
+    st.session_state.playlist_index = 0
+if "is_playlist" not in st.session_state:
+    st.session_state.is_playlist = False
+if "playlist_title" not in st.session_state:
+    st.session_state.playlist_title = ""
+if "pending_next" not in st.session_state:
+    st.session_state.pending_next = False
+
 
 # ---------- UI Layout ----------
 
@@ -1008,57 +1070,100 @@ with col_input:
     )
 
 with col_btn:
-    load_clicked = st.button("🚀 Transcribe", use_container_width=True, key="load_btn")
+    _btn_label = "📋 Load Playlist" if is_playlist_url(url_input) else "🚀 Transcribe"
+    load_clicked = st.button(_btn_label, use_container_width=True, key="load_btn")
 
 st.markdown('</div>', unsafe_allow_html=True)
 
 
 # ---------- Handle Load & Transcribe ----------
+
+# Determine the URL to transcribe this render cycle
+_url_to_transcribe: str | None = None
+
 if load_clicked and url_input:
-    video_id = extract_video_id(url_input)
+    if is_playlist_url(url_input):
+        # ── Playlist: fetch metadata, then transcribe first video ─────────────
+        st.session_state.is_playlist = True
+        st.session_state.transcript_data = None
+        st.session_state.pause_time = None
+        st.session_state.summary = None
+        st.session_state.chat_history = []
+        st.session_state.chatbot_active = False
+        with st.spinner("📋 Fetching playlist…"):
+            try:
+                pl_resp = requests.post(
+                    f"{BACKEND_URL}/api/playlist",
+                    json={"url": url_input},
+                    timeout=60,
+                )
+                if pl_resp.status_code == 200:
+                    pl_data = pl_resp.json()
+                    st.session_state.playlist_videos = pl_data["videos"]
+                    st.session_state.playlist_title = pl_data["playlist_title"]
+                    st.session_state.playlist_index = 0
+                    if pl_data["videos"]:
+                        _url_to_transcribe = pl_data["videos"][0]["url"]
+                    else:
+                        st.error("❌ Playlist is empty or no videos could be loaded.")
+                else:
+                    st.error(f"❌ Playlist error: {pl_resp.json().get('detail', 'Unknown')}")
+            except requests.exceptions.ConnectionError:
+                st.error("❌ Cannot connect to backend. Make sure FastAPI is running on port 8000.")
+            except Exception as e:
+                st.error(f"❌ Could not load playlist: {str(e)}")
+    else:
+        # ── Single video ──────────────────────────────────────────────────────
+        st.session_state.is_playlist = False
+        st.session_state.playlist_videos = []
+        st.session_state.playlist_title = ""
+        _url_to_transcribe = url_input
+
+elif st.session_state.pending_next:
+    # ── Playlist skip / next (triggered by the Next button) ──────────────────
+    st.session_state.pending_next = False
+    idx = st.session_state.playlist_index
+    if 0 <= idx < len(st.session_state.playlist_videos):
+        _url_to_transcribe = st.session_state.playlist_videos[idx]["url"]
+
+# ── Common transcription block ────────────────────────────────────────────────
+if _url_to_transcribe:
+    video_id = extract_video_id(_url_to_transcribe)
     if not video_id:
         st.error("❌ Invalid YouTube URL. Please paste a valid YouTube video link.")
     else:
         st.session_state.is_loading = True
         st.session_state.transcript_data = None
-        # Reset chatbot state for new video
         st.session_state.pause_time = None
         st.session_state.summary = None
         st.session_state.chat_history = []
         st.session_state.chatbot_active = False
-        # Clear stale pause time in backend immediately
         try:
             requests.post(f"{BACKEND_URL}/api/set_pause", json={"time": None}, timeout=2)
         except Exception:
             pass
 
-        # Progress display
         progress_container = st.empty()
         with progress_container.container():
             st.markdown("---")
             col1, col2, col3 = st.columns(3)
             with col1:
-                step1 = st.empty()
-                step1.info("⏳ **Step 1/3**: Extracting video info...")
+                st.empty().info("⏳ **Step 1/3**: Extracting video info...")
             with col2:
-                step2 = st.empty()
-                step2.markdown("⬜ **Step 2/3**: Downloading audio...")
+                st.empty().markdown("⬜ **Step 2/3**: Downloading audio...")
             with col3:
-                step3 = st.empty()
-                step3.markdown("⬜ **Step 3/3**: Transcribing in parallel chunks...")
+                st.empty().markdown("⬜ **Step 3/3**: Transcribing in parallel chunks...")
 
         try:
             with st.spinner(""):
-                # Call backend API
                 response = requests.post(
                     f"{BACKEND_URL}/api/transcribe",
-                    json={"url": url_input},
-                    timeout=600,  # 10 min timeout for long videos
+                    json={"url": _url_to_transcribe},
+                    timeout=600,
                 )
 
             if response.status_code == 200:
                 data = response.json()
-                # Clear stale pause time from previous video
                 try:
                     requests.post(f"{BACKEND_URL}/api/set_pause", json={"time": None}, timeout=3)
                 except Exception:
@@ -1071,7 +1176,6 @@ if load_clicked and url_input:
                 st.session_state.detected_language = data["detected_language"]
                 st.session_state.full_text = data["full_text"]
                 st.session_state.is_loading = False
-
                 progress_container.empty()
                 st.rerun()
             else:
@@ -1088,6 +1192,49 @@ if load_clicked and url_input:
         except Exception as e:
             st.error(f"❌ Unexpected error: {str(e)}")
             st.session_state.is_loading = False
+
+
+# ---------- Playlist Queue Panel ----------
+if st.session_state.is_playlist and st.session_state.playlist_videos:
+    videos = st.session_state.playlist_videos
+    idx = st.session_state.playlist_index
+    total = len(videos)
+
+    cards_html = ""
+    for i, v in enumerate(videos):
+        if i < idx:
+            status_class = "pl-card pl-done"
+            badge = '<span class="pl-badge">✓</span>'
+        elif i == idx:
+            status_class = "pl-card pl-current"
+            badge = '<span class="pl-badge pl-badge-playing">▶ Now</span>'
+        else:
+            status_class = "pl-card"
+            badge = f'<span class="pl-badge">{i + 1}</span>'
+
+        dur_str = format_duration(v["duration"]) if v.get("duration") else "--:--"
+        title_safe = v["title"].replace("&", "&amp;").replace("<", "&lt;").replace(">", "&gt;")
+        thumb = v.get("thumbnail") or f"https://i.ytimg.com/vi/{v['id']}/mqdefault.jpg"
+
+        cards_html += f"""
+        <div class="{status_class}">
+            {badge}
+            <img src="{thumb}" alt="" loading="lazy">
+            <div class="pl-card-body">
+                <div class="pl-card-title">{title_safe}</div>
+                <div class="pl-card-dur">{dur_str}</div>
+            </div>
+        </div>"""
+
+    st.markdown(f"""
+    <div class="video-info-card">
+        <div class="playlist-header">
+            <h3>📋 {st.session_state.playlist_title.replace('<','&lt;').replace('>','&gt;')}</h3>
+            <span class="pl-count">Video {idx + 1} / {total}</span>
+        </div>
+        <div class="playlist-queue">{cards_html}</div>
+    </div>
+    """, unsafe_allow_html=True)
 
 
 # ---------- Display Video + Transcript ----------
@@ -1108,6 +1255,29 @@ if st.session_state.transcript_data and st.session_state.video_id:
         </div>
     </div>
     """, unsafe_allow_html=True)
+
+    # ── Playlist navigation bar ───────────────────────────────────────────────
+    if st.session_state.is_playlist and st.session_state.playlist_videos:
+        _pl_idx = st.session_state.playlist_index
+        _pl_videos = st.session_state.playlist_videos
+        _next_idx = _pl_idx + 1
+        _, _nav_col, _ = st.columns([1, 2, 1])
+        with _nav_col:
+            if _next_idx < len(_pl_videos):
+                _next_title = _pl_videos[_next_idx]["title"]
+                if len(_next_title) > 38:
+                    _next_title = _next_title[:38] + "…"
+                if st.button(f"⏭️ Next → {_next_title}", use_container_width=True, key="next_video_btn"):
+                    st.session_state.playlist_index = _next_idx
+                    st.session_state.pending_next = True
+                    st.session_state.transcript_data = None
+                    st.session_state.pause_time = None
+                    st.session_state.summary = None
+                    st.session_state.chat_history = []
+                    st.session_state.chatbot_active = False
+                    st.rerun()
+            else:
+                st.success("✅ Playlist complete — all videos watched!")
 
     # Build and render the player + transcript HTML
     html = build_player_html(
