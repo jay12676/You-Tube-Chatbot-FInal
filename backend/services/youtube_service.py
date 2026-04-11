@@ -120,16 +120,23 @@ def extract_playlist_info(url: str) -> dict:
     }
     with yt_dlp.YoutubeDL(ydl_opts) as ydl:
         info = ydl.extract_info(url, download=False)
+        # Force-materialise the LazyList INSIDE the context so the ydl
+        # network session is still open when each entry is fetched.
+        raw_entries = list(info.get("entries") or [])
 
     if not info:
         raise ValueError("Could not extract playlist info from the provided URL")
 
-    entries = info.get("entries") or []
+    print(f"[YouTube] Raw entries fetched: {len(raw_entries)}")
+
     videos = []
-    for entry in entries:
-        if not entry or not entry.get("id"):
+    for entry in raw_entries:
+        if not entry:
             continue
-        vid_id = entry["id"]
+        vid_id = entry.get("id") or entry.get("url", "").split("v=")[-1].split("&")[0]
+        if not vid_id:
+            print(f"[YouTube] Skipping entry with no id: {list(entry.keys())}")
+            continue
         videos.append({
             "id": vid_id,
             "title": entry.get("title", "Unknown Title"),
