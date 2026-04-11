@@ -1053,18 +1053,17 @@ if "pending_next" not in st.session_state:
 st.markdown("""
 <div class="main-header">
     <h1>🎬 YouTube Smart Chatbot</h1>
-    <p>Paste any YouTube URL • Real-time transcription • Pause to get AI summary & ask doubts</p>
+    <p>Paste a YouTube video or playlist URL • Real-time transcription • Pause for AI summary & ask doubts</p>
 </div>
 """, unsafe_allow_html=True)
 
 # URL Input Section
-st.markdown('<div class="url-container">', unsafe_allow_html=True)
 col_input, col_btn = st.columns([4, 1])
 
 with col_input:
     url_input = st.text_input(
         "🔗 YouTube URL",
-        placeholder="https://www.youtube.com/watch?v=...",
+        placeholder="https://www.youtube.com/watch?v=...  or  playlist?list=...",
         label_visibility="collapsed",
         key="url_input",
     )
@@ -1072,8 +1071,6 @@ with col_input:
 with col_btn:
     _btn_label = "📋 Load Playlist" if is_playlist_url(url_input) else "🚀 Transcribe"
     load_clicked = st.button(_btn_label, use_container_width=True, key="load_btn")
-
-st.markdown('</div>', unsafe_allow_html=True)
 
 
 # ---------- Handle Load & Transcribe ----------
