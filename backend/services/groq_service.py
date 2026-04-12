@@ -9,8 +9,8 @@ from dotenv import load_dotenv
 
 load_dotenv()
 
-# Default model — fast, free, and high-quality on Groq
-MODEL = "llama-3.3-70b-versatile"
+# Model — override via GROQ_MODEL env var
+MODEL = os.getenv("GROQ_MODEL", "llama-3.3-70b-versatile")
 
 
 def _get_client() -> Groq:

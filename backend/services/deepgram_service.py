@@ -15,7 +15,7 @@ from dotenv import load_dotenv
 load_dotenv()
 
 DEEPGRAM_API_URL = "https://api.deepgram.com/v1/listen"
-CHUNK_DURATION_SEC = 300   # 5 minutes per chunk
+CHUNK_DURATION_SEC = int(os.getenv("DEEPGRAM_CHUNK_DURATION_SEC", "300"))  # seconds per chunk
 
 
 # ──────────────────────────────────────────────────────────────────────────────
@@ -212,7 +212,7 @@ def _split_audio(audio_path: str, chunk_sec: int) -> tuple[list, str | None]:
 # ──────────────────────────────────────────────────────────────────────────────
 
 _DEEPGRAM_PARAMS = {
-    "model": "nova-2",
+    "model": os.getenv("DEEPGRAM_MODEL", "nova-2"),
     "smart_format": "true",
     "utterances": "true",
     "detect_language": "true",

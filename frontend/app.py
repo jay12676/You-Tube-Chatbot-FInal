@@ -4,10 +4,15 @@ Features: URL input → Video embed → Real-time synced transcript
           → Pause to get AI Summary → Ask doubts via RAG chatbot
 """
 
+import os
 import streamlit as st
 import requests
 import json
 import re
+from dotenv import load_dotenv
+
+# Load .env from the frontend/ directory (same folder as this file)
+load_dotenv(os.path.join(os.path.dirname(__file__), ".env"))
 
 # ---------- Page Config ----------
 st.set_page_config(
@@ -17,7 +22,7 @@ st.set_page_config(
     initial_sidebar_state="collapsed",
 )
 
-BACKEND_URL = "http://localhost:8011"
+BACKEND_URL = os.getenv("BACKEND_URL", "http://localhost:8011")
 
 # ---------- Custom CSS ----------
 st.markdown("""
@@ -397,7 +402,7 @@ def is_playlist_url(url: str) -> bool:
     return bool(url) and "list=" in url and ("youtube.com" in url or "youtu.be" in url)
 
 
-def build_player_html(video_id: str, segments: list, title: str, words: list = None) -> str:
+def build_player_html(video_id: str, segments: list, title: str, words: list = None, backend_url: str = "http://localhost:8011") -> str:
     """
     Build a self-contained HTML page with side-by-side layout:
     - LEFT: YouTube video player + status bar
@@ -826,7 +831,7 @@ def build_player_html(video_id: str, segments: list, title: str, words: list = N
                     banner.className = 'pause-banner visible';
                     window.parent.postMessage({{ type: 'youtube_paused', time: currentTime }}, '*');
                     // Store pause time in backend so Streamlit can read it without postMessage
-                    fetch('http://localhost:8011/api/set_pause', {{
+                    fetch('{backend_url}/api/set_pause', {{
                         method: 'POST',
                         headers: {{'Content-Type': 'application/json'}},
                         body: JSON.stringify({{time: currentTime}})
@@ -1106,7 +1111,7 @@ if load_clicked and url_input:
                 else:
                     st.error(f"❌ Playlist error: {pl_resp.json().get('detail', 'Unknown')}")
             except requests.exceptions.ConnectionError:
-                st.error("❌ Cannot connect to backend. Make sure FastAPI is running on port 8000.")
+                st.error(f"❌ Cannot connect to backend at {BACKEND_URL}. Make sure FastAPI is running.")
             except Exception as e:
                 st.error(f"❌ Could not load playlist: {str(e)}")
     else:
@@ -1181,7 +1186,7 @@ if _url_to_transcribe:
                 st.session_state.is_loading = False
 
         except requests.exceptions.ConnectionError:
-            st.error("❌ Cannot connect to backend. Make sure FastAPI is running on port 8000.")
+            st.error(f"❌ Cannot connect to backend at {BACKEND_URL}. Make sure FastAPI is running.")
             st.session_state.is_loading = False
         except requests.exceptions.Timeout:
             st.error("❌ Request timed out. The video might be too long.")
@@ -1282,6 +1287,7 @@ if st.session_state.transcript_data and st.session_state.video_id:
         segments=st.session_state.transcript_data,
         words=st.session_state.words_data,
         title=st.session_state.video_title,
+        backend_url=BACKEND_URL,
     )
 
     # Side-by-side layout: height needs video (aspect 16:9 at ~half width) + status bar
