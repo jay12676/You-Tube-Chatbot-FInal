@@ -1,5 +1,5 @@
 """
-FastAPI backend for YouTube Smart Chatbot.
+FastAPI backend for YoTube Smart Chatbot.
 Handles video audio extraction, Deepgram transcription,
 and RAG-based summarization & Q&A via Groq.
 """

@@ -47,6 +47,7 @@ def extract_video_info(url: str) -> dict:
         'quiet': True,
         'no_warnings': True,
         'skip_download': True,
+        'extractor_args': {'youtube': {'player_client': ['tv_embedded']}},
     }
 
     with yt_dlp.YoutubeDL(ydl_opts) as ydl:
@@ -74,6 +75,7 @@ def download_audio(url: str, video_id: str) -> str:
         'quiet': True,
         'no_warnings': True,
         'extract_flat': False,
+        'extractor_args': {'youtube': {'player_client': ['tv_embedded']}},
     }
 
     with yt_dlp.YoutubeDL(ydl_opts) as ydl:
