@@ -95,7 +95,7 @@ def download_audio(url: str, video_id: str) -> str:
     output_template = os.path.join(DOWNLOADS_DIR, f"{video_id}.%(ext)s")
 
     ydl_opts = {
-        'format': 'bestaudio/best',
+        'format': 'bestaudio[ext=m4a]/bestaudio[ext=webm]/bestaudio/best',
         'outtmpl': output_template,
         'quiet': True,
         'no_warnings': True,
