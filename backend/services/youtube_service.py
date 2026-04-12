@@ -71,7 +71,7 @@ def extract_video_info(url: str) -> dict:
         'quiet': True,
         'no_warnings': True,
         'skip_download': True,
-        'extractor_args': {'youtube': {'player_client': ['ios', 'tv_embedded', 'android']}},
+        'extractor_args': {'youtube': {'player_client': ['android_music', 'mediaconnect']}},
         **_get_ydl_auth_opts(),
     }
 
@@ -100,7 +100,7 @@ def download_audio(url: str, video_id: str) -> str:
         'quiet': True,
         'no_warnings': True,
         'extract_flat': False,
-        'extractor_args': {'youtube': {'player_client': ['ios', 'tv_embedded', 'android']}},
+        'extractor_args': {'youtube': {'player_client': ['android_music', 'mediaconnect']}},
         **_get_ydl_auth_opts(),
     }
 
