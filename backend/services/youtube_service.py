@@ -6,6 +6,8 @@ import yt_dlp
 import re
 import os
 import sys
+import base64
+import tempfile
 
 # Fix Windows console encoding for Unicode
 if sys.stdout.encoding != 'utf-8':
@@ -17,6 +19,28 @@ if sys.stderr.encoding != 'utf-8':
 os.environ["PYTHONIOENCODING"] = "utf-8"
 
 DOWNLOADS_DIR = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), "..", "downloads")
+
+
+def _get_ydl_auth_opts() -> dict:
+    """
+    Returns extra yt-dlp options for authentication/bot-bypass.
+    - Reads YTDLP_COOKIES_B64 (base64-encoded cookies.txt) and writes to a temp file.
+    - Reads YTDLP_PROXY if set.
+    """
+    opts = {}
+    cookies_b64 = os.getenv("YTDLP_COOKIES_B64")
+    if cookies_b64:
+        try:
+            tmp = tempfile.NamedTemporaryFile(delete=False, suffix=".txt", mode="wb")
+            tmp.write(base64.urlsafe_b64decode(cookies_b64 + '=='))
+            tmp.close()
+            opts["cookiefile"] = tmp.name
+        except Exception as e:
+            print(f"[yt-dlp] Failed to load cookies: {e}")
+    proxy = os.getenv("YTDLP_PROXY")
+    if proxy:
+        opts["proxy"] = proxy
+    return opts
 
 
 def extract_video_id(url: str) -> str | None:
@@ -47,7 +71,8 @@ def extract_video_info(url: str) -> dict:
         'quiet': True,
         'no_warnings': True,
         'skip_download': True,
-        'extractor_args': {'youtube': {'player_client': ['tv_embedded']}},
+        'extractor_args': {'youtube': {'player_client': ['ios', 'tv_embedded', 'android']}},
+        **_get_ydl_auth_opts(),
     }
 
     with yt_dlp.YoutubeDL(ydl_opts) as ydl:
@@ -75,7 +100,8 @@ def download_audio(url: str, video_id: str) -> str:
         'quiet': True,
         'no_warnings': True,
         'extract_flat': False,
-        'extractor_args': {'youtube': {'player_client': ['tv_embedded']}},
+        'extractor_args': {'youtube': {'player_client': ['ios', 'tv_embedded', 'android']}},
+        **_get_ydl_auth_opts(),
     }
 
     with yt_dlp.YoutubeDL(ydl_opts) as ydl:
