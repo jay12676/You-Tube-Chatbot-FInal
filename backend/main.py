@@ -22,8 +22,8 @@ from backend.services.deepgram_service import transcribe_audio
 from backend.services.caption_service import get_youtube_captions
 from backend.services.groq_service import summarize_transcript, chat_with_context
 
-# Load environment variables
-load_dotenv()
+# Load environment variables from backend/.env
+load_dotenv(os.path.join(os.path.dirname(os.path.abspath(__file__)), ".env"))
 
 app = FastAPI(
     title="YouTube Smart Chatbot API",

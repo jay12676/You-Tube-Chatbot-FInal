@@ -7,7 +7,7 @@ import os
 from groq import Groq
 from dotenv import load_dotenv
 
-load_dotenv()
+load_dotenv(os.path.join(os.path.dirname(os.path.abspath(__file__)), "..", ".env"))
 
 # Model — override via GROQ_MODEL env var
 MODEL = os.getenv("GROQ_MODEL", "llama-3.3-70b-versatile")

@@ -12,7 +12,7 @@ import tempfile
 import httpx
 from dotenv import load_dotenv
 
-load_dotenv()
+load_dotenv(os.path.join(os.path.dirname(os.path.abspath(__file__)), "..", ".env"))
 
 DEEPGRAM_API_URL = "https://api.deepgram.com/v1/listen"
 CHUNK_DURATION_SEC = int(os.getenv("DEEPGRAM_CHUNK_DURATION_SEC", "300"))  # seconds per chunk

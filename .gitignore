@@ -3,6 +3,7 @@ __pycache__/
 *.pyc
 .env
 frontend/.env
+backend/.env
 downloads/
 *.egg-info/
 dist/
