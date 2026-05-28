@@ -71,10 +71,12 @@ def summarize_transcript(
     Returns:
         Summary string
     """
-    # Filter segments up to the pause point
+    # Consider both spoken and on-screen visual content up to the pause point,
+    # so visuals-only videos (no speech) still get summarised.
     watched_segments = [s for s in segments if s["start"] <= pause_time]
+    watched_visuals = [v for v in (visual_segments or []) if v["start"] <= pause_time]
 
-    if not watched_segments:
+    if not watched_segments and not watched_visuals:
         return "No transcript content found up to this point."
 
     # Build chronological transcript (spoken + on-screen visuals)
@@ -134,10 +136,11 @@ def chat_with_context(
     Returns:
         Answer string
     """
-    # Filter segments up to the pause point
+    # Consider both spoken and on-screen visual content up to the pause point.
     watched_segments = [s for s in segments if s["start"] <= pause_time]
+    watched_visuals = [v for v in (visual_segments or []) if v["start"] <= pause_time]
 
-    if not watched_segments:
+    if not watched_segments and not watched_visuals:
         return "There's no transcript content available up to this point to answer your question."
 
     # Build chronological transcript (spoken + on-screen visuals)

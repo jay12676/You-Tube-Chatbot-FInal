@@ -29,3 +29,10 @@ def test_summarize_accepts_visual_segments_signature():
     # empty segments path returns the no-content message without calling the API
     assert gs.summarize_transcript([], pause_time=5.0, visual_segments=[]) == \
         "No transcript content found up to this point."
+
+
+def test_build_context_visual_only_video():
+    # no spoken segments, only visuals — context should still have the visual line
+    vis = [{"start": 1.0, "end": 3.0, "label": "scene", "description": "Glowing mushrooms"}]
+    out = gs._build_context([], vis, pause_time=10.0)
+    assert out == '[VISUAL 00:01] scene: Glowing mushrooms'
