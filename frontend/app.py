@@ -421,8 +421,21 @@ def render_visual_timeline(visual_segments: list, query: str = "") -> None:
 
 
 def is_playlist_url(url: str) -> bool:
-    """Return True if the URL points to a YouTube playlist."""
-    return bool(url) and "list=" in url and ("youtube.com" in url or "youtu.be" in url)
+    """
+    Return True if the URL points to a real YouTube playlist.
+
+    Auto-generated "radio"/"mix" lists (IDs starting with RD, e.g. RDOikOgyDeOQw
+    appended when you click a song) are NOT real playlists — yt-dlp can't
+    enumerate them — so we treat those as a single video instead.
+    """
+    if not url or "list=" not in url:
+        return False
+    if not ("youtube.com" in url or "youtu.be" in url):
+        return False
+    match = re.search(r"list=([A-Za-z0-9_-]+)", url)
+    if match and match.group(1).startswith("RD"):
+        return False  # radio / auto-mix — handle as a single video
+    return True
 
 
 def build_player_html(video_id: str, segments: list, title: str, words: list = None, backend_url: str = "http://localhost:8011") -> str:

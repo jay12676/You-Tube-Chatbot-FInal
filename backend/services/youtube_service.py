@@ -67,16 +67,21 @@ def extract_video_info(url: str) -> dict:
     if not video_id:
         raise ValueError(f"Could not extract video ID from URL: {url}")
 
+    # Use a clean single-video URL so yt-dlp never follows a &list=RD... radio
+    # mix or &start_radio=1 into a different (often unavailable) video.
+    clean_url = f"https://www.youtube.com/watch?v={video_id}"
+
     ydl_opts = {
         'quiet': True,
         'no_warnings': True,
         'skip_download': True,
+        'noplaylist': True,
         'extractor_args': {'youtube': {'player_client': ['android_music', 'mediaconnect']}},
         **_get_ydl_auth_opts(),
     }
 
     with yt_dlp.YoutubeDL(ydl_opts) as ydl:
-        info = ydl.extract_info(url, download=False)
+        info = ydl.extract_info(clean_url, download=False)
         return {
             "id": video_id,
             "title": info.get("title", "Unknown Title"),
@@ -94,18 +99,23 @@ def download_audio(url: str, video_id: str) -> str:
     os.makedirs(DOWNLOADS_DIR, exist_ok=True)
     output_template = os.path.join(DOWNLOADS_DIR, f"{video_id}.%(ext)s")
 
+    # Clean single-video URL — ignore any &list=RD.../&start_radio params so we
+    # download the requested video, not the next one in an auto-generated mix.
+    clean_url = f"https://www.youtube.com/watch?v={video_id}"
+
     ydl_opts = {
         'format': 'bestaudio[ext=m4a]/bestaudio[ext=webm]/bestaudio/best',
         'outtmpl': output_template,
         'quiet': True,
         'no_warnings': True,
         'extract_flat': False,
+        'noplaylist': True,
         'extractor_args': {'youtube': {'player_client': ['android_music', 'mediaconnect']}},
         **_get_ydl_auth_opts(),
     }
 
     with yt_dlp.YoutubeDL(ydl_opts) as ydl:
-        info = ydl.extract_info(url, download=True)
+        info = ydl.extract_info(clean_url, download=True)
         ext = info.get('ext', 'webm')
         downloaded_path = os.path.join(DOWNLOADS_DIR, f"{video_id}.{ext}")
 
@@ -148,12 +158,15 @@ def extract_playlist_info(url: str) -> dict:
     }
     with yt_dlp.YoutubeDL(ydl_opts) as ydl:
         info = ydl.extract_info(url, download=False)
+        if not info:
+            # yt-dlp returns None for un-enumerable lists (e.g. RD radio mixes)
+            raise ValueError(
+                "Could not load this playlist — it may be a YouTube auto-mix/radio "
+                "(list starting with 'RD'). Paste the single video URL instead."
+            )
         # Force-materialise the LazyList INSIDE the context so the ydl
         # network session is still open when each entry is fetched.
         raw_entries = list(info.get("entries") or [])
-
-    if not info:
-        raise ValueError("Could not extract playlist info from the provided URL")
 
     print(f"[YouTube] Raw entries fetched: {len(raw_entries)}")
 

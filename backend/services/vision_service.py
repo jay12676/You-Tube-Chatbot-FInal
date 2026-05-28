@@ -31,6 +31,28 @@ _PROMPT = (
 )
 
 
+def _normalize_youtube_url(url: str) -> str:
+    """
+    Reduce a YouTube URL to the clean canonical form Gemini accepts:
+    https://www.youtube.com/watch?v=VIDEO_ID
+
+    Extra params like &list=RD... or &start_radio=1 make Gemini fetch the page
+    as HTML ("Unsupported MIME type: text/html") instead of recognizing it as a
+    video, so we strip everything down to the 11-char video id.
+    """
+    patterns = [
+        r"(?:v=)([0-9A-Za-z_-]{11})",
+        r"(?:youtu\.be/)([0-9A-Za-z_-]{11})",
+        r"(?:embed/)([0-9A-Za-z_-]{11})",
+        r"(?:shorts/)([0-9A-Za-z_-]{11})",
+    ]
+    for pat in patterns:
+        m = re.search(pat, url)
+        if m:
+            return f"https://www.youtube.com/watch?v={m.group(1)}"
+    return url
+
+
 def _ts_to_seconds(ts: str) -> float | None:
     """Convert 'MM:SS' or 'HH:MM:SS' to float seconds. None if unparseable."""
     if not isinstance(ts, str) or not ts.strip():
@@ -113,6 +135,11 @@ def _call_gemini(youtube_url: str) -> str:
                 types.Part(text=_PROMPT),
             ]
         ),
+        # LOW media resolution = far fewer tokens per frame → faster and well
+        # inside the free-tier limits, at a small cost to fine detail.
+        config=types.GenerateContentConfig(
+            media_resolution=types.MediaResolution.MEDIA_RESOLUTION_LOW,
+        ),
     )
     return response.text or ""
 
@@ -128,8 +155,9 @@ async def analyze_video_visuals(youtube_url: str, duration: int) -> list[dict]:
     if not os.getenv("GEMINI_API_KEY"):
         print("[Vision] GEMINI_API_KEY not set — skipping visual analysis")
         return []
+    clean_url = _normalize_youtube_url(youtube_url)
     try:
-        raw = await asyncio.to_thread(_call_gemini, youtube_url)
+        raw = await asyncio.to_thread(_call_gemini, clean_url)
         segments = _parse_visual_response(raw)
         print(f"[Vision] Got {len(segments)} visual segments")
         return segments

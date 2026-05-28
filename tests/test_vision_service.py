@@ -1,6 +1,16 @@
 from backend.services import vision_service as vs
 
 
+def test_normalize_youtube_url_strips_extra_params():
+    url = "https://www.youtube.com/watch?v=OikOgyDeOQw&list=RDOikOgyDeOQw&start_radio=1"
+    assert vs._normalize_youtube_url(url) == "https://www.youtube.com/watch?v=OikOgyDeOQw"
+
+
+def test_normalize_youtube_url_short_link():
+    assert vs._normalize_youtube_url("https://youtu.be/dQw4w9WgXcQ?t=42") == \
+        "https://www.youtube.com/watch?v=dQw4w9WgXcQ"
+
+
 def test_ts_to_seconds_mm_ss():
     assert vs._ts_to_seconds("02:30") == 150.0
 
