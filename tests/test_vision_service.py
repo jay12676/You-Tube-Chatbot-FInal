@@ -51,3 +51,36 @@ def test_parse_visual_response_drops_malformed_rows():
 
 def test_parse_visual_response_garbage_returns_empty():
     assert vs._parse_visual_response("I could not analyze this video.") == []
+
+
+import asyncio
+
+
+def test_analyze_returns_empty_when_no_key(monkeypatch):
+    monkeypatch.delenv("GEMINI_API_KEY", raising=False)
+    out = asyncio.run(vs.analyze_video_visuals("https://youtu.be/abc", 120))
+    assert out == []
+
+
+def test_analyze_returns_empty_on_api_error(monkeypatch):
+    monkeypatch.setenv("GEMINI_API_KEY", "fake-key")
+
+    def boom(*args, **kwargs):
+        raise RuntimeError("network down")
+
+    monkeypatch.setattr(vs, "_call_gemini", boom)
+    out = asyncio.run(vs.analyze_video_visuals("https://youtu.be/abc", 120))
+    assert out == []
+
+
+def test_analyze_parses_successful_call(monkeypatch):
+    monkeypatch.setenv("GEMINI_API_KEY", "fake-key")
+
+    def fake_call(url):
+        return '[{"timestamp":"00:03","end":"00:08","label":"slide","description":"Agenda"}]'
+
+    monkeypatch.setattr(vs, "_call_gemini", fake_call)
+    out = asyncio.run(vs.analyze_video_visuals("https://youtu.be/abc", 120))
+    assert len(out) == 1
+    assert out[0]["label"] == "slide"
+    assert out[0]["start"] == 3.0

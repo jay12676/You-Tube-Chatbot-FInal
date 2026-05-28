@@ -94,3 +94,45 @@ def _parse_visual_response(raw: str) -> list[dict]:
         })
     segments.sort(key=lambda s: s["start"])
     return segments
+
+
+def _call_gemini(youtube_url: str) -> str:
+    """
+    Synchronous Gemini call. Sends the YouTube URL + prompt, returns raw text.
+    Isolated so tests can monkeypatch it. Raises on any API failure.
+    """
+    from google import genai
+    from google.genai import types
+
+    client = genai.Client(api_key=os.getenv("GEMINI_API_KEY"))
+    response = client.models.generate_content(
+        model=VISION_MODEL,
+        contents=types.Content(
+            parts=[
+                types.Part(file_data=types.FileData(file_uri=youtube_url)),
+                types.Part(text=_PROMPT),
+            ]
+        ),
+    )
+    return response.text or ""
+
+
+async def analyze_video_visuals(youtube_url: str, duration: int) -> list[dict]:
+    """
+    Analyze a video's on-screen visuals with Gemini.
+
+    Returns [{"start": float, "end": float, "label": str, "description": str}].
+    Returns [] on any failure (missing key, unsupported video, API error) so the
+    audio pipeline is never affected.
+    """
+    if not os.getenv("GEMINI_API_KEY"):
+        print("[Vision] GEMINI_API_KEY not set — skipping visual analysis")
+        return []
+    try:
+        raw = await asyncio.to_thread(_call_gemini, youtube_url)
+        segments = _parse_visual_response(raw)
+        print(f"[Vision] Got {len(segments)} visual segments")
+        return segments
+    except Exception as e:  # noqa: BLE001 - vision must never break transcribe
+        print(f"[Vision] Analysis failed ({type(e).__name__}: {e}) — continuing audio-only")
+        return []
