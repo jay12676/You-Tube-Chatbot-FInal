@@ -8,6 +8,7 @@ from fastapi import FastAPI, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel
 from dotenv import load_dotenv
+import asyncio
 import os
 import sys
 
@@ -21,6 +22,7 @@ from backend.services.youtube_service import extract_video_info, download_audio,
 from backend.services.deepgram_service import transcribe_audio
 from backend.services.caption_service import get_youtube_captions
 from backend.services.groq_service import summarize_transcript, chat_with_context
+from backend.services.vision_service import analyze_video_visuals
 
 # Load environment variables from backend/.env
 load_dotenv(os.path.join(os.path.dirname(os.path.abspath(__file__)), ".env"))
@@ -58,6 +60,13 @@ class WordTimestamp(BaseModel):
     end: float
 
 
+class VisualSegment(BaseModel):
+    start: float
+    end: float
+    label: str
+    description: str
+
+
 class TranscriptResponse(BaseModel):
     video_id: str
     title: str
@@ -65,6 +74,7 @@ class TranscriptResponse(BaseModel):
     thumbnail: str
     segments: list[TranscriptSegment]
     words: list[WordTimestamp] = []
+    visual_segments: list[VisualSegment] = []
     full_text: str
     detected_language: str
 
@@ -72,6 +82,7 @@ class TranscriptResponse(BaseModel):
 class SummarizeRequest(BaseModel):
     segments: list[dict]
     pause_time: float
+    visual_segments: list[dict] = []
 
 
 class SummarizeResponse(BaseModel):
@@ -90,6 +101,7 @@ class ChatRequest(BaseModel):
     segments: list[dict]
     pause_time: float
     chat_history: list[ChatMessage] = []
+    visual_segments: list[dict] = []
 
 
 class ChatResponse(BaseModel):
@@ -121,11 +133,42 @@ def root():
     return {"status": "ok", "message": "YouTube Smart Chatbot API is running 🚀"}
 
 
+async def _get_audio_transcript(url: str, video_info: dict) -> dict:
+    """
+    Existing audio pipeline, extracted so it can run concurrently with vision.
+    Tries YouTube captions first; falls back to downloading audio + Deepgram.
+    Blocking calls are off-loaded to threads so they run in parallel with vision.
+    """
+    print("[API] Trying YouTube captions first...")
+    transcript_result = await asyncio.to_thread(get_youtube_captions, video_info["id"])
+
+    if transcript_result:
+        print(f"[API] YouTube captions found: {len(transcript_result['segments'])} segments")
+        return transcript_result
+
+    print("[API] No YouTube captions — falling back to Deepgram...")
+    audio_path = await asyncio.to_thread(download_audio, url, video_info["id"])
+    print(f"[API] Audio saved: {audio_path}")
+
+    transcript_result = await transcribe_audio(audio_path)
+    print(f"[API] Deepgram transcription: {len(transcript_result['segments'])} segments, "
+          f"{len(transcript_result.get('words', []))} words")
+
+    try:
+        if os.path.exists(audio_path):
+            os.remove(audio_path)
+            print(f"[API] Cleaned up audio file: {audio_path}")
+    except Exception as cleanup_err:
+        print(f"[API] Warning: Could not delete audio file: {cleanup_err}")
+
+    return transcript_result
+
+
 @app.post("/api/transcribe", response_model=TranscriptResponse)
 async def transcribe_video(request: VideoRequest):
     """
-    Takes a YouTube URL, downloads audio, transcribes with Deepgram,
-    and returns timestamped transcript segments.
+    Takes a YouTube URL, runs the audio transcript and Gemini visual analysis
+    concurrently, and returns timestamped transcript + visual segments.
     """
     try:
         # Step 1: Extract video metadata
@@ -133,31 +176,13 @@ async def transcribe_video(request: VideoRequest):
         video_info = extract_video_info(request.url)
         print(f"[API] Video: {video_info['title']} (duration: {video_info['duration']}s)", flush=True)
 
-        # Step 2: Try YouTube captions first (fast, gapless, no API cost)
-        print(f"[API] Trying YouTube captions first...")
-        transcript_result = get_youtube_captions(video_info["id"])
+        # Step 2: Run audio transcript and visual analysis concurrently
+        transcript_result, visual_segments = await asyncio.gather(
+            _get_audio_transcript(request.url, video_info),
+            analyze_video_visuals(request.url, video_info["duration"]),
+        )
 
-        if transcript_result:
-            print(f"[API] YouTube captions found: {len(transcript_result['segments'])} segments")
-        else:
-            # Step 3: Fall back to Deepgram (download audio → transcribe)
-            print(f"[API] No YouTube captions — falling back to Deepgram...")
-            audio_path = download_audio(request.url, video_info["id"])
-            print(f"[API] Audio saved: {audio_path}")
-
-            transcript_result = await transcribe_audio(audio_path)
-            print(f"[API] Deepgram transcription: {len(transcript_result['segments'])} segments, "
-                  f"{len(transcript_result.get('words', []))} words")
-
-            # Clean up downloaded audio
-            try:
-                if os.path.exists(audio_path):
-                    os.remove(audio_path)
-                    print(f"[API] Cleaned up audio file: {audio_path}")
-            except Exception as cleanup_err:
-                print(f"[API] Warning: Could not delete audio file: {cleanup_err}")
-
-        # Step 4: Return response
+        # Step 3: Return combined response
         return TranscriptResponse(
             video_id=video_info["id"],
             title=video_info["title"],
@@ -168,6 +193,9 @@ async def transcribe_video(request: VideoRequest):
             ],
             words=[
                 WordTimestamp(**w) for w in transcript_result.get("words", [])
+            ],
+            visual_segments=[
+                VisualSegment(**v) for v in visual_segments
             ],
             full_text=transcript_result["full_text"],
             detected_language=transcript_result["detected_language"],
@@ -191,7 +219,9 @@ def summarize_video(request: SummarizeRequest):
         print(f"[API] Summarizing transcript up to {request.pause_time:.1f}s "
               f"({len(request.segments)} total segments)")
 
-        summary = summarize_transcript(request.segments, request.pause_time)
+        summary = summarize_transcript(
+            request.segments, request.pause_time, request.visual_segments
+        )
         segments_used = len([s for s in request.segments if s["start"] <= request.pause_time])
 
         print(f"[API] Summary generated ({segments_used} segments used)")
@@ -225,6 +255,7 @@ def chat_about_video(request: ChatRequest):
             segments=request.segments,
             pause_time=request.pause_time,
             chat_history=history,
+            visual_segments=request.visual_segments,
         )
 
         print(f"[API] Chat answer generated ({len(answer)} chars)")
