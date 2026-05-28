@@ -1346,7 +1346,13 @@ if st.session_state.transcript_data is not None and st.session_state.video_id:
     # VISUAL TIMELINE SECTION
     # ==========================================
     if st.session_state.get("visual_segments"):
-        with st.expander(f"📺 Visual Timeline ({len(st.session_state.visual_segments)} moments)", expanded=False):
+        # Auto-expand when the video has no spoken transcript, so a visuals-only
+        # video surfaces its content instead of looking empty.
+        _no_speech = not st.session_state.transcript_data
+        with st.expander(
+            f"📺 Visual Timeline ({len(st.session_state.visual_segments)} moments)",
+            expanded=_no_speech,
+        ):
             vt_query = st.text_input(
                 "Search what's on screen",
                 key="visual_search",
@@ -1509,12 +1515,18 @@ if st.session_state.transcript_data is not None and st.session_state.video_id:
     # Full transcript expander — below the chatbot
     st.markdown('<div class="custom-divider"></div>', unsafe_allow_html=True)
     with st.expander("📄 Full Transcript Text", expanded=False):
-        st.text_area(
-            "Complete transcript",
-            value=st.session_state.get("full_text", ""),
-            height=300,
-            label_visibility="collapsed",
-        )
+        if st.session_state.transcript_data:
+            st.text_area(
+                "Complete transcript",
+                value=st.session_state.get("full_text", ""),
+                height=300,
+                label_visibility="collapsed",
+            )
+        else:
+            st.info(
+                "🎬 This video has no spoken audio — its content is visual. "
+                "See the **📺 Visual Timeline** above for what appears on screen."
+            )
 
 elif not st.session_state.is_loading:
     # Empty state
