@@ -397,6 +397,29 @@ def format_duration(seconds: int) -> str:
     return f"{m}:{s:02d}"
 
 
+def render_visual_timeline(visual_segments: list, query: str = "") -> None:
+    """Render the searchable visual timeline as Streamlit markdown rows."""
+    q = query.strip().lower()
+    shown = 0
+    for v in visual_segments:
+        text = f"{v.get('label', '')} {v.get('description', '')}".lower()
+        if q and q not in text:
+            continue
+        ts = format_duration(int(v.get("start", 0)))
+        label = str(v.get("label", "scene")).replace("<", "&lt;").replace(">", "&gt;")
+        desc = str(v.get("description", "")).replace("<", "&lt;").replace(">", "&gt;")
+        st.markdown(
+            f"<div style='padding:6px 0; border-bottom:1px solid #1e293b;'>"
+            f"<span style='color:#a78bfa; font-weight:600;'>⏱ {ts}</span> "
+            f"<span style='color:#38bdf8; font-size:0.8rem; text-transform:uppercase;'>{label}</span><br>"
+            f"<span style='color:#cbd5e1; font-size:0.9rem;'>{desc}</span></div>",
+            unsafe_allow_html=True,
+        )
+        shown += 1
+    if shown == 0:
+        st.caption("No visual moments match your search." if q else "No visual content detected for this video.")
+
+
 def is_playlist_url(url: str) -> bool:
     """Return True if the URL points to a YouTube playlist."""
     return bool(url) and "list=" in url and ("youtube.com" in url or "youtu.be" in url)
@@ -1026,6 +1049,8 @@ if "full_text" not in st.session_state:
     st.session_state.full_text = ""
 if "words_data" not in st.session_state:
     st.session_state.words_data = []
+if "visual_segments" not in st.session_state:
+    st.session_state.visual_segments = []
 
 # RAG Chatbot state
 if "pause_time" not in st.session_state:
@@ -1136,6 +1161,7 @@ if _url_to_transcribe:
     else:
         st.session_state.is_loading = True
         st.session_state.transcript_data = None
+        st.session_state.visual_segments = []
         st.session_state.pause_time = None
         st.session_state.summary = None
         st.session_state.chat_history = []
@@ -1172,6 +1198,7 @@ if _url_to_transcribe:
                     pass
                 st.session_state.transcript_data = data["segments"]
                 st.session_state.words_data = data.get("words", [])
+                st.session_state.visual_segments = data.get("visual_segments", [])
                 st.session_state.video_id = data["video_id"]
                 st.session_state.video_title = data["title"]
                 st.session_state.video_duration = data["duration"]
@@ -1273,6 +1300,7 @@ if st.session_state.transcript_data and st.session_state.video_id:
                     st.session_state.playlist_index = _next_idx
                     st.session_state.pending_next = True
                     st.session_state.transcript_data = None
+                    st.session_state.visual_segments = []
                     st.session_state.pause_time = None
                     st.session_state.summary = None
                     st.session_state.chat_history = []
@@ -1297,6 +1325,20 @@ if st.session_state.transcript_data and st.session_state.video_id:
 
     # Divider
     st.markdown('<div class="custom-divider"></div>', unsafe_allow_html=True)
+
+    # ==========================================
+    # VISUAL TIMELINE SECTION
+    # ==========================================
+    if st.session_state.get("visual_segments"):
+        with st.expander(f"📺 Visual Timeline ({len(st.session_state.visual_segments)} moments)", expanded=False):
+            vt_query = st.text_input(
+                "Search what's on screen",
+                key="visual_search",
+                placeholder="e.g. diagram, Newton, code...",
+                label_visibility="collapsed",
+            )
+            render_visual_timeline(st.session_state.visual_segments, vt_query)
+        st.markdown('<div class="custom-divider"></div>', unsafe_allow_html=True)
 
     # ==========================================
     # RAG CHATBOT SECTION
@@ -1362,6 +1404,7 @@ if st.session_state.transcript_data and st.session_state.video_id:
                     json={
                         "segments": st.session_state.transcript_data,
                         "pause_time": float(input_pause_time),
+                        "visual_segments": st.session_state.get("visual_segments", []),
                     },
                     timeout=60,
                 )
@@ -1428,6 +1471,7 @@ if st.session_state.transcript_data and st.session_state.video_id:
                                 "segments": st.session_state.transcript_data,
                                 "pause_time": float(st.session_state.pause_time),
                                 "chat_history": st.session_state.chat_history[:-1],
+                                "visual_segments": st.session_state.get("visual_segments", []),
                             },
                             timeout=60,
                         )
