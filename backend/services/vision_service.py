@@ -15,7 +15,7 @@ from dotenv import load_dotenv
 
 load_dotenv(os.path.join(os.path.dirname(os.path.abspath(__file__)), "..", ".env"))
 
-VISION_MODEL = os.getenv("GEMINI_VISION_MODEL", "gemini-2.0-flash")
+VISION_MODEL = os.getenv("GEMINI_VISION_MODEL", "gemini-flash-latest")
 
 _PROMPT = (
     "You are analyzing a video to capture what is shown ON SCREEN (not spoken). "
