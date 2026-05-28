@@ -1280,7 +1280,10 @@ if st.session_state.is_playlist and st.session_state.playlist_videos:
 
 
 # ---------- Display Video + Transcript ----------
-if st.session_state.transcript_data and st.session_state.video_id:
+# Render once a transcription has completed — transcript_data is a list (possibly
+# empty for a no-speech video that only has visual segments), so check `is not None`
+# rather than truthiness, otherwise visuals-only videos would show a blank page.
+if st.session_state.transcript_data is not None and st.session_state.video_id:
 
     # Video info card
     duration_str = format_duration(st.session_state.video_duration)
