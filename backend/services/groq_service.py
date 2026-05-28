@@ -31,7 +31,36 @@ def _format_timestamp(seconds: float) -> str:
     return f"{m:02d}:{s:02d}"
 
 
-def summarize_transcript(segments: list[dict], pause_time: float) -> str:
+def _build_context(
+    segments: list[dict],
+    visual_segments: list[dict] | None,
+    pause_time: float,
+) -> str:
+    """
+    Build a chronological transcript that interleaves spoken lines with
+    on-screen visual descriptions, filtered to content up to pause_time.
+
+    Spoken line:  "[MM:SS] text"
+    Visual line:  "[VISUAL MM:SS] label: description"
+    """
+    rows: list[tuple[float, int, str]] = []
+    for s in segments:
+        if s["start"] <= pause_time:
+            rows.append((s["start"], 0, f"[{_format_timestamp(s['start'])}] {s['text']}"))
+    for v in (visual_segments or []):
+        if v["start"] <= pause_time:
+            ts = _format_timestamp(v["start"])
+            rows.append((v["start"], 1, f"[VISUAL {ts}] {v['label']}: {v['description']}"))
+    # sort by time; on tie, visual (1) after spoken (0)
+    rows.sort(key=lambda r: (r[0], r[1]))
+    return "\n".join(r[2] for r in rows)
+
+
+def summarize_transcript(
+    segments: list[dict],
+    pause_time: float,
+    visual_segments: list[dict] | None = None,
+) -> str:
     """
     Generate a concise summary of transcript segments up to the pause point.
 
@@ -48,13 +77,8 @@ def summarize_transcript(segments: list[dict], pause_time: float) -> str:
     if not watched_segments:
         return "No transcript content found up to this point."
 
-    # Build transcript text with timestamps
-    transcript_lines = []
-    for seg in watched_segments:
-        ts = _format_timestamp(seg["start"])
-        transcript_lines.append(f"[{ts}] {seg['text']}")
-
-    transcript_text = "\n".join(transcript_lines)
+    # Build chronological transcript (spoken + on-screen visuals)
+    transcript_text = _build_context(segments, visual_segments, pause_time)
     time_str = _format_timestamp(pause_time)
 
     # Build the prompt
@@ -96,6 +120,7 @@ def chat_with_context(
     segments: list[dict],
     pause_time: float,
     chat_history: list[dict] | None = None,
+    visual_segments: list[dict] | None = None,
 ) -> str:
     """
     Answer a user question using transcript context (RAG-style).
@@ -115,19 +140,16 @@ def chat_with_context(
     if not watched_segments:
         return "There's no transcript content available up to this point to answer your question."
 
-    # Build transcript text
-    transcript_lines = []
-    for seg in watched_segments:
-        ts = _format_timestamp(seg["start"])
-        transcript_lines.append(f"[{ts}] {seg['text']}")
-
-    transcript_text = "\n".join(transcript_lines)
+    # Build chronological transcript (spoken + on-screen visuals)
+    transcript_text = _build_context(segments, visual_segments, pause_time)
     time_str = _format_timestamp(pause_time)
 
     system_prompt = (
         "You are an AI tutor helping a student understand a YouTube video. "
-        "Answer the student's question based ONLY on the transcript content provided. "
-        "If the answer is not clearly found in the transcript, say so honestly. "
+        "The transcript contains spoken lines plus lines marked [VISUAL ...] that "
+        "describe what is shown on screen (slides, diagrams, on-screen text). "
+        "Answer the student's question based ONLY on this transcript content, using "
+        "both spoken and visual information. If the answer is not clearly found, say so honestly. "
         "Write in plain, simple text like a helpful friend explaining something. "
         "Do NOT use markdown, asterisks, hashes, bullet dashes, or HTML tags. "
         "Use short paragraphs. If listing points, write them as: 1. First point. 2. Second point."
