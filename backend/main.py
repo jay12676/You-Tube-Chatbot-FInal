@@ -171,16 +171,18 @@ async def transcribe_video(request: VideoRequest):
     concurrently, and returns timestamped transcript + visual segments.
     """
     try:
-        # Step 1: Extract video metadata
+        # Step 1: Kick off visual analysis immediately — it only needs the URL,
+        # not the metadata, so it overlaps the (blocking) metadata + audio work.
         print(f"[API] Loading video: {request.url}")
-        video_info = extract_video_info(request.url)
-        print(f"[API] Video: {video_info['title']} (duration: {video_info['duration']}s)", flush=True)
+        vision_task = asyncio.create_task(analyze_video_visuals(request.url, 0))
 
-        # Step 2: Run audio transcript and visual analysis concurrently
-        transcript_result, visual_segments = await asyncio.gather(
-            _get_audio_transcript(request.url, video_info),
-            analyze_video_visuals(request.url, video_info["duration"]),
-        )
+        # Step 2: Extract metadata + run the audio transcript pipeline.
+        video_info = await asyncio.to_thread(extract_video_info, request.url)
+        print(f"[API] Video: {video_info['title']} (duration: {video_info['duration']}s)", flush=True)
+        transcript_result = await _get_audio_transcript(request.url, video_info)
+
+        # Step 3: Collect the visual analysis (already running in parallel).
+        visual_segments = await vision_task
 
         # Step 3: Return combined response
         return TranscriptResponse(
