@@ -8,3 +8,4 @@ requests
 pydantic
 groq
 youtube-transcript-api
+google-genai
