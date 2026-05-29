@@ -132,6 +132,47 @@ def download_audio(url: str, video_id: str) -> str:
         return downloaded_path
 
 
+def download_video(url: str, video_id: str) -> str:
+    """
+    Download a low-resolution video file (for study-notes frame extraction).
+
+    Mirrors download_audio but fetches a small mp4 video stream — enough for
+    ffmpeg to grab readable slide/diagram frames without a large download.
+    Returns the path to the downloaded video file.
+    """
+    os.makedirs(DOWNLOADS_DIR, exist_ok=True)
+    output_template = os.path.join(DOWNLOADS_DIR, f"{video_id}.%(ext)s")
+
+    # Clean single-video URL so we never follow a &list=RD.../&start_radio mix.
+    clean_url = f"https://www.youtube.com/watch?v={video_id}"
+
+    ydl_opts = {
+        'format': 'bestvideo[height<=480][ext=mp4]/best[height<=480][ext=mp4]/best',
+        'outtmpl': output_template,
+        'quiet': True,
+        'no_warnings': True,
+        'noplaylist': True,
+        'extractor_args': {'youtube': {'player_client': ['android_music', 'mediaconnect']}},
+        **_get_ydl_auth_opts(),
+    }
+
+    with yt_dlp.YoutubeDL(ydl_opts) as ydl:
+        info = ydl.extract_info(clean_url, download=True)
+        ext = info.get('ext', 'mp4')
+        downloaded_path = os.path.join(DOWNLOADS_DIR, f"{video_id}.{ext}")
+
+        if not os.path.exists(downloaded_path):
+            for f in os.listdir(DOWNLOADS_DIR):
+                if f.startswith(video_id):
+                    downloaded_path = os.path.join(DOWNLOADS_DIR, f)
+                    break
+
+        if not os.path.exists(downloaded_path):
+            raise FileNotFoundError(f"Video file not found after download for: {video_id}")
+
+        return downloaded_path
+
+
 def extract_playlist_info(url: str) -> dict:
     """
     Extract metadata for every video in a YouTube playlist.
