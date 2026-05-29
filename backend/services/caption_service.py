@@ -43,7 +43,7 @@ def get_youtube_captions(video_id: str) -> dict | None:
         print(f"[Captions] Could not list transcripts for {video_id}: {e}")
         return None
 
-    # 2. Collect all available language codes (manual first, then generated)
+    # 2. Collect available language codes (manual vs auto-generated)
     manual_codes = []
     generated_codes = []
     for t in transcript_list:
@@ -54,16 +54,35 @@ def get_youtube_captions(video_id: str) -> dict | None:
 
     print(f"[Captions] Manual: {manual_codes} | Auto-generated: {generated_codes}")
 
-    # 3. Build priority fetch order: manual codes first, then generated
-    fetch_order = manual_codes + generated_codes
+    # 3. Build the fetch order.
+    #    Popular videos carry community-translated MANUAL tracks in dozens of
+    #    languages, so "first manual track" is often a random translation (e.g.
+    #    Arabic on an English talk). The AUTO-GENERATED track is always in the
+    #    language actually spoken, so we treat it as the original language and
+    #    fetch that first — then user-preferred languages, then anything left.
+    original_lang = generated_codes[0] if generated_codes else None
+
+    fetch_order: list[str] = []
+    if original_lang:
+        fetch_order.append(original_lang)
+    for code in _LANGUAGE_PRIORITY:
+        if code not in fetch_order:
+            fetch_order.append(code)
+    for code in manual_codes + generated_codes:
+        if code not in fetch_order:
+            fetch_order.append(code)
+
     if not fetch_order:
         print(f"[Captions] No captions available for {video_id}")
         return None
 
-    # 4. Fetch using the best available language
+    # 4. Fetch — youtube_transcript_api returns the first language in the list
+    #    that actually exists (preferring a manual track over generated for the
+    #    same language).
     try:
         entries = api.fetch(video_id, languages=fetch_order)
-        detected_language = fetch_order[0]
+        # Use the language actually returned, not just the first one we asked for.
+        detected_language = getattr(entries, "language_code", None) or original_lang or fetch_order[0]
     except Exception as e:
         print(f"[Captions] Fetch failed: {e}")
         return None
