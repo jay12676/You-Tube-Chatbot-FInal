@@ -1064,6 +1064,8 @@ if "words_data" not in st.session_state:
     st.session_state.words_data = []
 if "visual_segments" not in st.session_state:
     st.session_state.visual_segments = []
+if "notes_pdf" not in st.session_state:
+    st.session_state.notes_pdf = None
 
 # RAG Chatbot state
 if "pause_time" not in st.session_state:
@@ -1175,6 +1177,7 @@ if _url_to_transcribe:
         st.session_state.is_loading = True
         st.session_state.transcript_data = None
         st.session_state.visual_segments = []
+        st.session_state.notes_pdf = None
         st.session_state.pause_time = None
         st.session_state.summary = None
         st.session_state.chat_history = []
@@ -1361,6 +1364,58 @@ if st.session_state.transcript_data is not None and st.session_state.video_id:
             )
             render_visual_timeline(st.session_state.visual_segments, vt_query)
         st.markdown('<div class="custom-divider"></div>', unsafe_allow_html=True)
+
+    # ==========================================
+    # EXPORT STUDY NOTES (PDF)
+    # ==========================================
+    st.markdown("#### 📄 Export Study Notes")
+    st.caption("Download a PDF study pack — the slides/diagrams shown on screen, paired with notes. Something YouTube never gives you.")
+    _scope_choice = st.radio(
+        "Coverage",
+        ["Whole video", "Up to pause point"],
+        horizontal=True,
+        key="notes_scope",
+        label_visibility="collapsed",
+    )
+    if st.button("📄 Generate Study Notes PDF", key="gen_notes_btn"):
+        _scope = "pause" if _scope_choice == "Up to pause point" else "full"
+        _pause_t = float(st.session_state.pause_time or 0)
+        with st.spinner("📝 Building your study pack (grabbing slides + writing notes)…"):
+            try:
+                _resp = requests.post(
+                    f"{BACKEND_URL}/api/export_notes",
+                    json={
+                        "url": f"https://www.youtube.com/watch?v={st.session_state.video_id}",
+                        "segments": st.session_state.transcript_data or [],
+                        "visual_segments": st.session_state.get("visual_segments", []),
+                        "scope": _scope,
+                        "pause_time": _pause_t,
+                    },
+                    timeout=240,
+                )
+                if _resp.status_code == 200:
+                    st.session_state.notes_pdf = _resp.content
+                else:
+                    st.session_state.notes_pdf = None
+                    try:
+                        _detail = _resp.json().get("detail", "Unknown error")
+                    except Exception:
+                        _detail = "Unknown error"
+                    st.error(f"❌ Export failed: {_detail}")
+            except Exception as e:
+                st.session_state.notes_pdf = None
+                st.error(f"❌ Could not connect to backend: {e}")
+
+    if st.session_state.get("notes_pdf"):
+        st.download_button(
+            "⬇️ Download Study Notes PDF",
+            data=st.session_state.notes_pdf,
+            file_name=f"study-notes-{st.session_state.video_id}.pdf",
+            mime="application/pdf",
+            key="dl_notes_btn",
+        )
+
+    st.markdown('<div class="custom-divider"></div>', unsafe_allow_html=True)
 
     # ==========================================
     # RAG CHATBOT SECTION
