@@ -6,11 +6,15 @@ and RAG-based summarization & Q&A via Groq.
 
 from fastapi import FastAPI, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
+from fastapi.responses import StreamingResponse
 from pydantic import BaseModel
 from dotenv import load_dotenv
 import asyncio
+import io
 import os
+import shutil
 import sys
+import tempfile
 
 # Fix Windows console encoding for Unicode (Hindi, emoji, etc.)
 if sys.stdout.encoding != 'utf-8':
@@ -18,11 +22,14 @@ if sys.stdout.encoding != 'utf-8':
 if sys.stderr.encoding != 'utf-8':
     sys.stderr.reconfigure(encoding='utf-8', errors='replace')
 
-from backend.services.youtube_service import extract_video_info, download_audio, extract_playlist_info
+from backend.services.youtube_service import (
+    extract_video_info, download_audio, download_video, extract_playlist_info,
+)
 from backend.services.deepgram_service import transcribe_audio
 from backend.services.caption_service import get_youtube_captions
-from backend.services.groq_service import summarize_transcript, chat_with_context
+from backend.services.groq_service import summarize_transcript, chat_with_context, generate_study_notes
 from backend.services.vision_service import analyze_video_visuals
+from backend.services.notes_service import extract_frames, build_study_notes_pdf
 
 # Load environment variables from backend/.env
 load_dotenv(os.path.join(os.path.dirname(os.path.abspath(__file__)), ".env"))
@@ -120,6 +127,14 @@ class PlaylistResponse(BaseModel):
     playlist_title: str
     videos: list[PlaylistVideoItem]
     total: int
+
+
+class ExportNotesRequest(BaseModel):
+    url: str
+    segments: list[dict] = []
+    visual_segments: list[dict] = []
+    scope: str = "full"          # "full" | "pause"
+    pause_time: float = 0.0
 
 
 # In-memory pause store (per-server, good enough for single-user dev use)
@@ -286,6 +301,64 @@ def get_playlist(request: VideoRequest):
     except Exception as e:
         print(f"[API] Playlist error: {type(e).__name__}: {e}")
         raise HTTPException(status_code=500, detail=f"Failed to load playlist: {str(e)}")
+
+
+@app.post("/api/export_notes")
+def export_notes(request: ExportNotesRequest):
+    """
+    Build a downloadable PDF study pack: on-screen slides/diagrams (screenshots)
+    paired with distilled notes, scoped to the whole video or up to the pause point.
+    Screenshots are best-effort — if video download/ffmpeg fails, the PDF is text-only.
+    """
+    try:
+        video_info = extract_video_info(request.url)
+    except Exception as e:
+        raise HTTPException(status_code=400, detail=f"Could not load video: {str(e)}")
+
+    # Determine scope
+    pause = request.pause_time if (request.scope == "pause" and request.pause_time and request.pause_time > 0) else None
+    if pause is None:
+        scope_label = "Whole video"
+    else:
+        scope_label = f"Up to {int(pause // 60)}:{int(pause % 60):02d}"
+
+    # Visual moments in scope → screenshot timestamps
+    scoped_visuals = request.visual_segments
+    if pause is not None:
+        scoped_visuals = [v for v in scoped_visuals if v.get("start", 0) <= pause]
+    timestamps = [float(v["start"]) for v in scoped_visuals if "start" in v]
+
+    tmp_dir = tempfile.mkdtemp(prefix="notes_frames_")
+    video_path = None
+    frames: dict = {}
+    try:
+        # Best-effort screenshots
+        if timestamps:
+            try:
+                video_path = download_video(request.url, video_info["id"])
+                frames = extract_frames(video_path, timestamps, tmp_dir)
+            except Exception as e:
+                print(f"[API] Study-notes screenshots unavailable ({type(e).__name__}: {e}) — text-only")
+
+        notes = generate_study_notes(request.segments, request.visual_segments, pause)
+        pdf_bytes = build_study_notes_pdf(notes, frames, video_info, scope_label)
+    except Exception as e:
+        print(f"[API] Export notes error: {type(e).__name__}: {e}")
+        raise HTTPException(status_code=500, detail=f"Failed to build study notes: {str(e)}")
+    finally:
+        try:
+            if video_path and os.path.exists(video_path):
+                os.remove(video_path)
+        except Exception:
+            pass
+        shutil.rmtree(tmp_dir, ignore_errors=True)
+
+    filename = f"study-notes-{video_info['id']}.pdf"
+    return StreamingResponse(
+        io.BytesIO(pdf_bytes),
+        media_type="application/pdf",
+        headers={"Content-Disposition": f'attachment; filename="{filename}"'},
+    )
 
 
 @app.post("/api/set_pause")
