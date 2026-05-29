@@ -223,10 +223,45 @@ def generate_study_notes(
     if pause_time and pause_time > 0:
         segs = [s for s in segs if s["start"] <= pause_time]
         scope_visuals = [v for v in visual_segments if v["start"] <= pause_time]
-        ctx_pause = pause_time
     else:
         scope_visuals = list(visual_segments)
-        ctx_pause = float("inf")
+
+    scope_visuals = sorted(scope_visuals, key=lambda v: float(v.get("start", 0)))
+    segs_sorted = sorted(segs, key=lambda s: float(s.get("start", 0)))
+
+    # Build "units" — the timeline points each section is anchored to.
+    # Prefer the real visual moments (so sections match extracted frames); when a
+    # video has no visuals but does have speech, chunk the transcript into topic
+    # windows so we still produce proper text notes.
+    units: list[dict] = []
+    if scope_visuals:
+        for i, v in enumerate(scope_visuals):
+            w_start = float(v["start"])
+            w_end = float(scope_visuals[i + 1]["start"]) if i + 1 < len(scope_visuals) else float("inf")
+            spoken = " ".join(
+                s.get("text", "") for s in segs_sorted
+                if (w_start - 0.5) <= float(s.get("start", 0)) < w_end
+            ).strip()
+            units.append({
+                "start": w_start,
+                "heading": str(v.get("label", "scene")).title(),
+                "shown_on_screen": v.get("description", ""),
+                "narration": spoken,
+            })
+    elif segs_sorted:
+        n_chunks = min(14, max(4, len(segs_sorted) // 8))
+        size = max(1, len(segs_sorted) // n_chunks)
+        for c in range(0, len(segs_sorted), size):
+            chunk = segs_sorted[c:c + size]
+            units.append({
+                "start": float(chunk[0].get("start", 0)),
+                "heading": "Topic",
+                "shown_on_screen": "",
+                "narration": " ".join(s.get("text", "") for s in chunk).strip(),
+            })
+
+    if not units:
+        return {"title": "Study Notes", "key_takeaways": [], "sections": []}
 
     def _fallback() -> dict:
         return {
@@ -234,55 +269,58 @@ def generate_study_notes(
             "key_takeaways": [],
             "sections": [
                 {
-                    "timestamp": float(v["start"]),
-                    "heading": str(v.get("label", "scene")).title(),
-                    "note": str(v.get("description", "")),
+                    "timestamp": float(u["start"]),
+                    "heading": u["heading"],
+                    "note": (u["narration"][:500] or u["shown_on_screen"]),
                 }
-                for v in scope_visuals
+                for u in units
             ],
         }
 
-    context = _build_context(segs, scope_visuals, ctx_pause)
-    if not context.strip():
-        return _fallback()
-
-    # Numbered, anchored list of the real visual moments. Sections are built
-    # deterministically from THESE timestamps (so they match the extracted
-    # frames). The model only enriches each moment by index with a heading+note.
+    # Numbered list for the model. Keep narration compact — Groq free tier is
+    # 12k tokens/min total, so the whole request must stay under that.
     moments = [
-        {"index": i, "timestamp": round(float(v["start"]), 1),
-         "label": v.get("label", ""), "description": v.get("description", "")}
-        for i, v in enumerate(scope_visuals)
+        {
+            "index": i,
+            "timestamp": round(float(u["start"]), 1),
+            "shown_on_screen": u["shown_on_screen"],
+            "narration": u["narration"][:500],
+        }
+        for i, u in enumerate(units)
     ]
 
     def _section_for(i: int, enrich: dict) -> dict:
-        v = scope_visuals[i]
+        u = units[i]
         e = enrich.get(i, {})
+        fallback_note = (u["narration"][:500] if u["narration"] else "") or u["shown_on_screen"]
         return {
-            "timestamp": float(v["start"]),
-            "heading": e.get("heading") or str(v.get("label", "scene")).title(),
-            "note": e.get("note") or str(v.get("description", "")),
+            "timestamp": float(u["start"]),
+            "heading": e.get("heading") or u["heading"],
+            "note": e.get("note") or fallback_note,
         }
 
     system_prompt = (
-        "You create concise, well-structured study notes from a video for a student. "
-        "You are given spoken lines and a numbered list of [VISUAL ...] on-screen moments. "
-        "Ground every note in the provided content and respond with JSON only."
+        "You are an expert tutor writing study notes from a video. For each on-screen "
+        "moment you are given the narration spoken during it and a description of what is "
+        "shown. Write notes that TEACH the concept from the narration AND explain what the "
+        "on-screen visual/diagram shows and what it indicates or means — not a description "
+        "like 'an image appears'. Write notes a student can revise from. Respond with JSON only."
     )
-    user_prompt = f"""Here is what the student watched (spoken lines and on-screen visual moments):
+    user_prompt = f"""The video's moments (each with its timestamp, what is shown on screen, and the narration spoken at that point):
 
-{context}
-
-The on-screen visual moments are (one per index):
 {json.dumps(moments, ensure_ascii=False)}
 
 Produce study notes as STRICT JSON with exactly this shape:
-{{"title": "concise title", "key_takeaways": ["bullet", ...], "notes": [{{"index": <int>, "heading": "short heading", "note": "1-3 sentence explanation grounded in the content"}}]}}
+{{"title": "concise descriptive title", "key_takeaways": ["bullet", ...], "notes": [{{"index": <int>, "heading": "short topic heading", "note": "2-4 sentence study note"}}]}}
+
+For each note:
+- Explain the CONCEPT being taught at that moment, using the narration (the actual lesson — definitions, reasoning, formulas, steps).
+- Then explain what the on-screen visual/diagram shows and what it indicates or demonstrates.
+- Make it substantive and self-contained, like real revision notes — do NOT just say what appears on screen.
 
 Rules:
-- Provide EXACTLY ONE notes entry for EACH index listed above — do not merge, skip, or invent indices.
-- Reuse the same index integers shown above.
-- key_takeaways: 3-6 crisp bullets of the most important overall points.
+- Provide EXACTLY ONE notes entry for EACH index above, reusing the same index integers. Do not merge or skip indices.
+- key_takeaways: 4-6 crisp bullets capturing the most important points of the whole video.
 - Output JSON only — no prose, no markdown fences."""
 
     try:
@@ -294,7 +332,7 @@ Rules:
                 {"role": "user", "content": user_prompt},
             ],
             temperature=0.3,
-            max_tokens=4096,
+            max_tokens=3500,
             response_format={"type": "json_object"},
         )
         data = json.loads(response.choices[0].message.content)
@@ -311,7 +349,7 @@ Rules:
                 "note": str(n.get("note", "")).strip(),
             }
 
-        sections = [_section_for(i, enrich) for i in range(len(scope_visuals))]
+        sections = [_section_for(i, enrich) for i in range(len(units))]
 
         return {
             "title": str(data.get("title") or "Study Notes").strip() or "Study Notes",
