@@ -304,14 +304,17 @@ def get_playlist(request: VideoRequest):
 
 
 @app.post("/api/export_notes")
-def export_notes(request: ExportNotesRequest):
+async def export_notes(request: ExportNotesRequest):
     """
     Build a downloadable PDF study pack: on-screen slides/diagrams (screenshots)
     paired with distilled notes, scoped to the whole video or up to the pause point.
     Screenshots are best-effort — if video download/ffmpeg fails, the PDF is text-only.
+
+    The Groq notes call and the video-download + frame-extraction are independent,
+    so they run concurrently to cut wall-clock time.
     """
     try:
-        video_info = extract_video_info(request.url)
+        video_info = await asyncio.to_thread(extract_video_info, request.url)
     except Exception as e:
         raise HTTPException(status_code=400, detail=f"Could not load video: {str(e)}")
 
@@ -329,26 +332,37 @@ def export_notes(request: ExportNotesRequest):
     timestamps = [float(v["start"]) for v in scoped_visuals if "start" in v]
 
     tmp_dir = tempfile.mkdtemp(prefix="notes_frames_")
-    video_path = None
-    frames: dict = {}
-    try:
-        # Best-effort screenshots
-        if timestamps:
-            try:
-                video_path = download_video(request.url, video_info["id"])
-                frames = extract_frames(video_path, timestamps, tmp_dir)
-            except Exception as e:
-                print(f"[API] Study-notes screenshots unavailable ({type(e).__name__}: {e}) — text-only")
+    state: dict = {"video_path": None}
 
-        notes = generate_study_notes(request.segments, request.visual_segments, pause)
-        pdf_bytes = build_study_notes_pdf(notes, frames, video_info, scope_label)
+    async def _build_frames() -> dict:
+        if not timestamps:
+            return {}
+        try:
+            vp = await asyncio.to_thread(download_video, request.url, video_info["id"])
+            state["video_path"] = vp
+            return await asyncio.to_thread(extract_frames, vp, timestamps, tmp_dir)
+        except Exception as e:  # noqa: BLE001 - screenshots are best-effort
+            print(f"[API] Study-notes screenshots unavailable ({type(e).__name__}: {e}) — text-only")
+            return {}
+
+    async def _build_notes() -> dict:
+        return await asyncio.to_thread(
+            generate_study_notes, request.segments, request.visual_segments, pause
+        )
+
+    try:
+        # Screenshots (download + ffmpeg) and the Groq notes call run in parallel.
+        frames, notes = await asyncio.gather(_build_frames(), _build_notes())
+        pdf_bytes = await asyncio.to_thread(
+            build_study_notes_pdf, notes, frames, video_info, scope_label
+        )
     except Exception as e:
         print(f"[API] Export notes error: {type(e).__name__}: {e}")
         raise HTTPException(status_code=500, detail=f"Failed to build study notes: {str(e)}")
     finally:
         try:
-            if video_path and os.path.exists(video_path):
-                os.remove(video_path)
+            if state["video_path"] and os.path.exists(state["video_path"]):
+                os.remove(state["video_path"])
         except Exception:
             pass
         shutil.rmtree(tmp_dir, ignore_errors=True)
