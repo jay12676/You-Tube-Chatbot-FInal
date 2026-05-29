@@ -246,30 +246,43 @@ def generate_study_notes(
     if not context.strip():
         return _fallback()
 
+    # Numbered, anchored list of the real visual moments. Sections are built
+    # deterministically from THESE timestamps (so they match the extracted
+    # frames). The model only enriches each moment by index with a heading+note.
     moments = [
-        {"timestamp": float(v["start"]), "label": v.get("label", ""), "description": v.get("description", "")}
-        for v in scope_visuals
+        {"index": i, "timestamp": round(float(v["start"]), 1),
+         "label": v.get("label", ""), "description": v.get("description", "")}
+        for i, v in enumerate(scope_visuals)
     ]
+
+    def _section_for(i: int, enrich: dict) -> dict:
+        v = scope_visuals[i]
+        e = enrich.get(i, {})
+        return {
+            "timestamp": float(v["start"]),
+            "heading": e.get("heading") or str(v.get("label", "scene")).title(),
+            "note": e.get("note") or str(v.get("description", "")),
+        }
 
     system_prompt = (
         "You create concise, well-structured study notes from a video for a student. "
-        "You are given spoken lines and [VISUAL ...] on-screen moments. "
+        "You are given spoken lines and a numbered list of [VISUAL ...] on-screen moments. "
         "Ground every note in the provided content and respond with JSON only."
     )
     user_prompt = f"""Here is what the student watched (spoken lines and on-screen visual moments):
 
 {context}
 
-The on-screen visual moments (timestamps in seconds) are:
+The on-screen visual moments are (one per index):
 {json.dumps(moments, ensure_ascii=False)}
 
 Produce study notes as STRICT JSON with exactly this shape:
-{{"title": "concise title", "key_takeaways": ["bullet", ...], "sections": [{{"timestamp": <seconds number>, "heading": "short heading", "note": "1-3 sentence explanation"}}]}}
+{{"title": "concise title", "key_takeaways": ["bullet", ...], "notes": [{{"index": <int>, "heading": "short heading", "note": "1-3 sentence explanation grounded in the content"}}]}}
 
 Rules:
-- Create one section per visual moment above, reusing its exact timestamp.
-- key_takeaways: 3-6 crisp bullets of the most important points overall.
-- If there are no visual moments, still give a title, key_takeaways, and an empty sections list.
+- Provide EXACTLY ONE notes entry for EACH index listed above — do not merge, skip, or invent indices.
+- Reuse the same index integers shown above.
+- key_takeaways: 3-6 crisp bullets of the most important overall points.
 - Output JSON only — no prose, no markdown fences."""
 
     try:
@@ -281,32 +294,30 @@ Rules:
                 {"role": "user", "content": user_prompt},
             ],
             temperature=0.3,
-            max_tokens=2048,
+            max_tokens=4096,
             response_format={"type": "json_object"},
         )
         data = json.loads(response.choices[0].message.content)
 
-        sections = []
-        for s in data.get("sections", []) or []:
+        # Map the model's per-index enrichment back onto the real moments.
+        enrich: dict[int, dict] = {}
+        for n in data.get("notes", []) or []:
             try:
-                ts = float(s.get("timestamp", 0) or 0)
+                idx = int(n.get("index"))
             except (TypeError, ValueError):
-                ts = 0.0
-            sections.append({
-                "timestamp": ts,
-                "heading": str(s.get("heading", "")).strip(),
-                "note": str(s.get("note", "")).strip(),
-            })
+                continue
+            enrich[idx] = {
+                "heading": str(n.get("heading", "")).strip(),
+                "note": str(n.get("note", "")).strip(),
+            }
 
-        result = {
+        sections = [_section_for(i, enrich) for i in range(len(scope_visuals))]
+
+        return {
             "title": str(data.get("title") or "Study Notes").strip() or "Study Notes",
             "key_takeaways": [str(k).strip() for k in (data.get("key_takeaways") or []) if str(k).strip()],
             "sections": sections,
         }
-        # If the model omitted sections but we have visuals, derive them.
-        if not result["sections"] and scope_visuals:
-            result["sections"] = _fallback()["sections"]
-        return result
 
     except Exception as e:  # noqa: BLE001 - notes generation must not hard-fail
         print(f"[Notes] Groq notes generation failed ({type(e).__name__}: {e}); using fallback")
