@@ -9,3 +9,4 @@ pydantic
 groq
 youtube-transcript-api
 google-genai
+fpdf2
