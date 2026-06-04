@@ -18,6 +18,38 @@ _LANGUAGE_PRIORITY = [
 ]
 
 
+# Languages whose native script is NON-Latin. If a caption track is labelled
+# with one of these codes but its text is mostly Latin characters, the track is
+# almost certainly a mislabelled translation (e.g. English subtitles uploaded
+# under the "hi" Hindi code) rather than the real original-language track.
+_NON_LATIN_LANGS = {
+    "hi", "ta", "te", "kn", "ml", "mr", "bn", "gu", "pa",
+    "ru", "ja", "ko", "zh", "ar", "fa", "ur", "th", "he", "el",
+}
+
+
+def _script_matches(text: str, lang_code: str) -> bool:
+    """
+    Heuristic: does a caption track's TEXT actually match its declared language
+    CODE, by script?
+
+    YouTube lets uploaders mislabel a track's language — most commonly English
+    subtitles uploaded under the original-language code, so asking for "hi" can
+    return English text. For non-Latin-script languages we can detect this
+    cheaply: genuine Hindi/Tamil/Arabic/… text is mostly non-ASCII letters,
+    whereas a mislabelled English track is almost all ASCII. For Latin-script
+    languages we cannot tell them apart this way, so we accept (return True).
+    """
+    base = lang_code.split("-")[0].lower()
+    if base not in _NON_LATIN_LANGS:
+        return True
+    letters = [c for c in text[:1000] if c.isalpha()]
+    if not letters:
+        return True
+    native = sum(1 for c in letters if ord(c) > 0x7F)
+    return native / len(letters) >= 0.3
+
+
 def get_youtube_captions(video_id: str) -> dict | None:
     """
     Fetch YouTube captions for the given video ID.
@@ -54,21 +86,28 @@ def get_youtube_captions(video_id: str) -> dict | None:
 
     print(f"[Captions] Manual: {manual_codes} | Auto-generated: {generated_codes}")
 
-    # 3. Build the fetch order.
-    #    Popular videos carry community-translated MANUAL tracks in dozens of
-    #    languages, so "first manual track" is often a random translation (e.g.
-    #    Arabic on an English talk). The AUTO-GENERATED track is always in the
-    #    language actually spoken, so we treat it as the original language and
-    #    fetch that first — then user-preferred languages, then anything left.
+    # 3. Build the fetch order so the transcript is ALWAYS in the video's own
+    #    spoken language — English video → English, German → German, etc.
+    #
+    #    The AUTO-GENERATED track is YouTube's speech-recognition of the actual
+    #    audio, so its language code IS the original spoken language. We treat it
+    #    as authoritative and fetch it first. Community-translated MANUAL tracks
+    #    (often dozens per popular video) must never override it — so after the
+    #    original language we prefer the video's OWN remaining tracks, and only
+    #    fall back to a global language list as an absolute last resort (reached
+    #    only when none of this video's tracks were usable).
     original_lang = generated_codes[0] if generated_codes else None
 
     fetch_order: list[str] = []
     if original_lang:
         fetch_order.append(original_lang)
-    for code in _LANGUAGE_PRIORITY:
+    # This video's own tracks next (auto-generated first — they're original
+    # language; manual tracks are usually translations).
+    for code in generated_codes + manual_codes:
         if code not in fetch_order:
             fetch_order.append(code)
-    for code in manual_codes + generated_codes:
+    # Global fallback list — last resort only.
+    for code in _LANGUAGE_PRIORITY:
         if code not in fetch_order:
             fetch_order.append(code)
 
@@ -76,16 +115,58 @@ def get_youtube_captions(video_id: str) -> dict | None:
         print(f"[Captions] No captions available for {video_id}")
         return None
 
-    # 4. Fetch — youtube_transcript_api returns the first language in the list
-    #    that actually exists (preferring a manual track over generated for the
-    #    same language).
-    try:
-        entries = api.fetch(video_id, languages=fetch_order)
-        # Use the language actually returned, not just the first one we asked for.
-        detected_language = getattr(entries, "language_code", None) or original_lang or fetch_order[0]
-    except Exception as e:
-        print(f"[Captions] Fetch failed: {e}")
-        return None
+    # 4. Index the available tracks so we can pick a SPECIFIC variant (manual
+    #    vs auto-generated) per language and VALIDATE its text before trusting
+    #    the label. The plain api.fetch(languages=...) can't do this: it prefers
+    #    a manual track over the generated one for the same code, which on this
+    #    kind of video returns a mislabelled English track sitting under "hi".
+    by_code: dict[str, dict] = {}
+    for t in transcript_list:
+        slot = by_code.setdefault(t.language_code, {})
+        slot["gen" if t.is_generated else "man"] = t
+
+    entries = None
+    detected_language = None
+    for code in fetch_order:
+        bucket = by_code.get(code)
+        if not bucket:
+            continue
+        # Manual first (usually higher quality), then auto-generated — but only
+        # accept a track whose text's SCRIPT matches the language code, so a
+        # mislabelled translation (English under "hi") is skipped in favour of
+        # the genuine auto-generated original-language track.
+        for variant in ("man", "gen"):
+            t = bucket.get(variant)
+            if t is None:
+                continue
+            try:
+                fetched = list(t.fetch())
+            except Exception as e:
+                print(f"[Captions] fetch {code}/{variant} failed: {e}")
+                continue
+            sample = " ".join(getattr(s, "text", "") for s in fetched[:40])
+            if not _script_matches(sample, code):
+                print(f"[Captions] {code}/{variant} looks mislabelled "
+                      f"(script != {code}) — skipping")
+                continue
+            entries = fetched
+            detected_language = t.language_code
+            break
+        if entries is not None:
+            break
+
+    # 4b. Last resort: if every candidate failed the script check (e.g. the only
+    #     track really is a mislabelled one), accept the library's default pick
+    #     so the user still gets *something* rather than no transcript at all.
+    if entries is None:
+        try:
+            fetched = api.fetch(video_id, languages=fetch_order)
+            entries = list(fetched)
+            detected_language = (getattr(fetched, "language_code", None)
+                                 or original_lang or fetch_order[0])
+        except Exception as e:
+            print(f"[Captions] Fetch failed: {e}")
+            return None
 
     if not entries:
         print(f"[Captions] Empty transcript returned for {video_id}")
