@@ -773,22 +773,22 @@ def build_player_html(video_id: str, segments: list, title: str, words: list = N
                         wordMeta.push({{start: w.start, rowIndex: Math.floor(i / ROW_SIZE), wordIndex: i}});
                     }});
                 }} else {{
-                    // Fall back: treat each segment as a row, split text into fake words.
-                    // Spread each segment's words from seg.start until the NEXT segment
-                    // begins — this fills visual gaps caused by short caption durations.
+                    // Fall back: YouTube captions are PHRASE-level (one start time per
+                    // line, no per-word timing). Faking even word-by-word timing makes
+                    // words drift out of sync with speech, so instead we reveal the whole
+                    // line together the instant its real caption start time arrives — like
+                    // normal subtitles. This stays accurately synced at the line level.
+                    // (For true per-word sync, use the "Precise word-sync" toggle, which
+                    // re-runs with Deepgram and provides real word timestamps above.)
                     segments.forEach(function(seg, si) {{
                         var toks = seg.text.split(' ').filter(function(t){{ return t.length > 0; }});
-                        // Use next segment's start as the spread end so words fill any gap
                         var spreadEnd = (si < segments.length - 1)
                             ? segments[si + 1].start
                             : seg.end;
-                        var duration = Math.max(spreadEnd - seg.start, 1.0);
-                        var fakeWords = toks.map(function(t, ti) {{
-                            return {{
-                                word: t,
-                                start: seg.start + (duration * ti / toks.length),
-                                end: seg.start + (duration * (ti + 1) / toks.length)
-                            }};
+                        // All words in the line share the line's real start time → they
+                        // appear together exactly when the line is spoken.
+                        var fakeWords = toks.map(function(t) {{
+                            return {{ word: t, start: seg.start, end: spreadEnd }};
                         }});
                         var globalOffset = wordMeta.length;
                         fakeWords.forEach(function(w, wi) {{
@@ -1379,7 +1379,23 @@ if st.session_state.transcript_data is not None and st.session_state.video_id:
     )
     if st.button("📄 Generate Study Notes PDF", key="gen_notes_btn"):
         _scope = "pause" if _scope_choice == "Up to pause point" else "full"
+        # For "Up to pause point" use the LIVE pause time stored in the backend
+        # (set by the player whenever the video is paused). Don't rely on
+        # st.session_state.pause_time — that is only populated after the user
+        # clicks "Get AI Summary", so paused-then-export would otherwise send 0
+        # and the backend would fall back to the whole video.
         _pause_t = float(st.session_state.pause_time or 0)
+        if _scope == "pause":
+            try:
+                _pr = requests.get(f"{BACKEND_URL}/api/get_pause", timeout=3)
+                _live_pause = _pr.json().get("time") if _pr.status_code == 200 else None
+                if _live_pause and _live_pause > 0:
+                    _pause_t = float(_live_pause)
+            except Exception:
+                pass
+            if _pause_t <= 0:
+                st.warning("⏸️ Pause the video first, then choose “Up to pause point.” "
+                           "No pause detected — using the whole video instead.")
         with st.spinner("📝 Building your study pack (grabbing slides + writing notes)…"):
             try:
                 _resp = requests.post(
@@ -1407,10 +1423,17 @@ if st.session_state.transcript_data is not None and st.session_state.video_id:
                 st.error(f"❌ Could not connect to backend: {e}")
 
     if st.session_state.get("notes_pdf"):
+        # Name the file after the video title (not the raw video ID), so the
+        # download is recognisable. Strip characters Windows/macOS disallow in
+        # filenames and trim length.
+        _raw_title = (st.session_state.get("video_title") or "study notes").strip()
+        _safe_title = re.sub(r'[\\/:*?"<>|]+', "", _raw_title)   # drop illegal chars
+        _safe_title = re.sub(r"\s+", " ", _safe_title).strip()[:80] or "study notes"
+        _notes_filename = f"Study Notes - {_safe_title}.pdf"
         st.download_button(
             "⬇️ Download Study Notes PDF",
             data=st.session_state.notes_pdf,
-            file_name=f"study-notes-{st.session_state.video_id}.pdf",
+            file_name=_notes_filename,
             mime="application/pdf",
             key="dl_notes_btn",
         )
