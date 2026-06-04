@@ -28,6 +28,7 @@ PURPLE = (124, 92, 246)
 DARK = (30, 30, 40)
 GREY = (90, 96, 110)
 CODE_BG = (244, 244, 248)
+QUESTION = (198, 40, 90)  # distinct rose/crimson so questions stand out from answers
 
 
 class Doc(FPDF):
@@ -102,7 +103,7 @@ def code(pdf, text):
 
 def qa(pdf, q, a):
     pdf.set_font("Deja", "B", 10.3)
-    pdf.set_text_color(*DARK)
+    pdf.set_text_color(*QUESTION)
     pdf.multi_cell(0, 5.4, "Q.  " + q, new_x=XPos.LMARGIN, new_y=YPos.NEXT)
     pdf.set_font("Deja", "", 10.3)
     pdf.set_text_color(50, 50, 60)
@@ -349,14 +350,24 @@ def build():
     h1(pdf, "Phase 6 — Service Deep-Dives")
     body(pdf, "This is the heart of the project. We go through each service in the order data flows.")
     h2(pdf, "6.1  caption_service.py")
-    body(pdf, "Tries YouTube's OWN captions. Subtlety: popular videos have community-translated "
-              "tracks, so the 'first' track can be the wrong language. Fix: the AUTO-GENERATED track "
-              "is always in the spoken language; we read its code, fetch that first, then a preferred "
-              "list, then anything else.")
-    code(pdf, "original_lang = generated_codes[0] if generated_codes else None\n"
-              "fetch_order = [original_lang] + _LANGUAGE_PRIORITY + remaining")
-    body(pdf, "Returns {segments, words, full_text, detected_language}, or None (no captions) → fall "
-              "back to Deepgram.")
+    body(pdf, "Tries YouTube's OWN captions, and guarantees the transcript is in the video's ORIGINAL "
+              "spoken language — English video → English, German → German, Hindi → Hindi. Two subtleties "
+              "make this hard:")
+    bullets(pdf, [
+        "Popular videos carry dozens of community-translated MANUAL tracks, so the 'first' track is "
+        "often a random translation. The AUTO-GENERATED track is YouTube's speech-recognition of the "
+        "actual audio, so its code IS the spoken language — we read that and fetch it first.",
+        "A track's LABEL can lie: some videos file English subtitles under the 'hi' code, so asking "
+        "for 'hi' returns English. We VALIDATE each track's script against its code (real Hindi is "
+        "Devanagari, not ASCII) and skip any track that's mislabelled, falling through to the genuine "
+        "original-language track.",
+    ])
+    code(pdf, "original_lang = generated_codes[0]      # auto-track = spoken language\n"
+              "fetch_order   = [original_lang] + this_videos_tracks + global_fallback\n"
+              "# for each candidate: prefer manual, but SKIP if script != language code")
+    body(pdf, "The global priority list is now only a last resort, so it can never override the real "
+              "language. Returns {segments, words, full_text, detected_language}, or None (no captions) "
+              "→ fall back to Deepgram.")
     h2(pdf, "6.2  deepgram_service.py")
     body(pdf, "Used when captions are missing. ffprobe reads duration; ffmpeg splits into 5-min "
               "chunks; all chunks go to Deepgram at once (asyncio.gather); results merge with each "
@@ -558,6 +569,20 @@ def build():
        "my code took the first one listed — which happened to be Arabic. Fix: the AUTO-GENERATED "
        "track is always in the language actually spoken, so I read its language code, treat it as the "
        "'original language', and fetch that first. English video → English, Hindi video → Hindi.")
+    qa(pdf, "Even after that, a Hindi video's transcript showed up in ENGLISH. The badge said 'HI' but "
+            "the text was English. What was going on?",
+       "The video had TWO tracks both labelled 'hi': the genuine auto-generated Hindi one, AND a "
+       "MANUAL track whose text was actually English (the creator filed English subtitles under the "
+       "Hindi code). The library prefers manual over auto for the same code, so it returned the "
+       "English text while still reporting the code as 'hi' — hence English words with a HI badge. A "
+       "label alone can't be trusted.")
+    qa(pdf, "So how did you make it robust for ANY language?",
+       "I VALIDATE a track's text against its language code by SCRIPT: genuine Hindi/Tamil/Arabic/… "
+       "is mostly non-ASCII letters, so a 'hi' track that's all ASCII is a mislabelled translation and "
+       "gets skipped — the code then falls through to the real Hindi track. I also demoted the global "
+       "language list to a last resort, so the video's OWN original-language track always wins. Result: "
+       "the live transcript is always in the spoken language — English→English, German→German, "
+       "Hindi→Hindi — and it's covered by unit tests for each case.")
 
     pdf.add_page()
     h2(pdf, "B. Visual understanding (video → timeline)")
