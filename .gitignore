@@ -12,3 +12,7 @@ build/
 backend_log.txt
 frontend_log.txt
 *.log
+
+# Local-only explanation/walkthrough PDF (kept out of the repo)
+explanation of you tube chatbot.pdf
+*.pdf
